@@ -1,0 +1,12 @@
+[package]
+name = "repolith"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Multi-repo orchestration for Rust ecosystems (placeholder, in development)."
+repository = "https://github.com/anatta-rs/repolith"
+homepage = "https://github.com/anatta-rs/repolith"
+authors = ["anatta-rs contributors"]
+readme = "README.md"
+keywords = ["multirepo", "orchestration", "build", "monorepo", "polyrepo"]
+categories = ["development-tools"]
