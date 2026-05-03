@@ -38,33 +38,35 @@ The negative scope is **fixed** and will not evolve:
 
 GDD-validated layout for milestone [v0.0.1 — bootstrap M1](https://github.com/anatta-rs/repolith/milestone/1).
 4 crates, 3 traits, layered execution with `FuturesUnordered` + `CancellationToken`.
+🟢 = additions vs the empty placeholder (everything is net-new in M1).
 
 ```mermaid
 graph TD
     subgraph CORE["crates/repolith-core (lib)"]
-        T_ACT["trait Action<br/>execute → Result&lt;BuildOutput, BuildError&gt;<br/>+ CancellationToken in Ctx"]
-        T_CACHE[trait Cache]
-        T_SRC[trait Source]
-        E_BUILD["BuildError<br/>· UpstreamUnreachable<br/>· CommandFailed{exit, stderr}<br/>· Io · Cancelled"]
-        E_PLAN["PlanError<br/>· Cycle{path}<br/>· MissingDep{from, to}"]
-        EM["ExecMode<br/>FailFast (cancel layer)<br/>KeepGoing (settle then halt)"]
-        P_PLAN[Plan<br/>layers: Vec&lt;Vec&lt;ActionId&gt;&gt;<br/>reasons: HashMap&lt;_, ChangeReason&gt;]
-        T_ORCH[Orchestrator<br/>builder · cache · manifest · registry<br/>max_parallelism · mode]
-        T_TYPES[ActionId · Sha256 · BuildEvent · Ctx]
-        T_MAN[Manifest types<br/>+ AttachedEntry+Direction]
+        T_ACT["trait Action<br/>execute → Result&lt;BuildOutput, BuildError&gt;<br/>+ CancellationToken in Ctx"]:::add
+        T_CACHE[trait Cache]:::add
+        T_SRC[trait Source]:::add
+        E_BUILD["<b>BuildError</b><br/>· UpstreamUnreachable<br/>· CommandFailed exit_code, stderr<br/>· IoError<br/>· Cancelled"]:::add
+        E_PLAN["<b>PlanError</b><br/>· Cycle path<br/>· MissingDep id"]:::add
+        EM["<b>ExecMode</b><br/>FailFast (cancel layer)<br/>KeepGoing (settle then halt)"]:::add
+        P_PLAN[Plan layers + reasons<br/>frozen DAG]:::add
+        T_ORCH[Orchestrator<br/>builder cache manifest registry<br/>max_parallelism, mode]:::add
+        T_TYPES[ActionId, Sha256, BuildEvent, Ctx]:::add
+        T_MAN[Manifest types<br/>+ AttachedEntry+Direction]:::add
     end
 
     subgraph CACHE["crates/repolith-cache-sqlite"]
-        SQL[SqliteCache::open path]
+        SQL[SqliteCache::open path]:::add
     end
     subgraph ACT["crates/repolith-actions (feature-gated)"]
-        F_GIT["GitClone<br/>(feature='git')"]
-        F_CARGO["CargoInstall<br/>(feature='cargo')"]
+        F_GIT[GitClone]:::add
+        F_CARGO[CargoInstall]:::add
     end
     subgraph CLI["crates/repolith-cli (bin)"]
-        BIN[main.rs · clap]
-        FLAGS["sync flags<br/>--explain · --dry-run<br/>-j N · -k/--keep-going"]
+        BIN[main.rs · clap]:::add
+        FLAGS["sync flags:<br/>--explain · --dry-run<br/>-j N · -k/--keep-going"]:::add
     end
+    TESTS["tests/<br/>manifest_parse + sync_smoke<br/>+ plan_layers + parallel_exec<br/>+ failfast_cancels + keepgoing_settles"]:::add
 
     SQL -.impl.-> T_CACHE
     F_GIT -.impl.-> T_ACT
@@ -73,39 +75,74 @@ graph TD
     T_ORCH --> P_PLAN
     T_ORCH --> EM
     T_ACT --> E_BUILD
+
+    classDef add fill:#90EE90,stroke:#228B22,color:#000
 ```
 
-### Sequence — `repolith sync` with `ExecMode::FailFast`
+### Sequence — `ExecMode::FailFast` (mid-layer cancel)
 
-Mid-layer cancellation via `FuturesUnordered` + shared `CancellationToken`
-(NOT `tokio::join_all` — see [#6](https://github.com/anatta-rs/repolith/issues/6)).
+Cancellation via `FuturesUnordered` + shared `CancellationToken` —
+NOT `tokio::join_all` (see [#6](https://github.com/anatta-rs/repolith/issues/6)
+implementation note).
 
 ```mermaid
 sequenceDiagram
     participant CLI
     participant Orch as Orchestrator
-    participant Pool as FuturesUnordered<br/>+ CancellationToken
-    participant A1 as A1 (slow)
-    participant B1 as B1 (fast, fails)
-    participant C1 as C1 (slow)
+    participant Tok as CancellationToken
+    participant L1a as Action A1<br/>(slow)
+    participant L1b as Action B1<br/>(fast, fails)
+    participant L1c as Action C1<br/>(slow)
+    participant L2 as Layer 2
 
     CLI->>Orch: execute_plan(plan, FailFast)
-    Orch->>Pool: spawn(A1, B1, C1) with shared cancel
+    Note over Orch: spawn layer 1 concurrent
     par
-        A1->>Pool: poll
+        Orch-)L1a: execute(ctx, token)
     and
-        B1->>Pool: poll
+        Orch-)L1b: execute(ctx, token)
     and
-        C1->>Pool: poll
+        Orch-)L1c: execute(ctx, token)
     end
-    B1-->>Pool: Err(CommandFailed) [first to settle]
-    Pool-->>Orch: yield Err
-    Orch->>Pool: cancel.cancel()
-    Note over A1,C1: tokio::select on cancel<br/>→ Err(Cancelled) immediately
-    A1-->>Pool: Err(Cancelled)
-    C1-->>Pool: Err(Cancelled)
-    Pool-->>Orch: drain remaining (3 events total)
-    Orch-->>CLI: Err(LayerFailed{events}) — layer N+1 NEVER STARTS
+    L1b-->>Orch: Err(CommandFailed)
+    Orch->>Tok: cancel
+    Tok-->>L1a: cancel signal
+    Tok-->>L1c: cancel signal
+    L1a-->>Orch: Err(Cancelled)
+    L1c-->>Orch: Err(Cancelled)
+    Note over Orch,L2: layer 2 NEVER STARTS
+    Orch-->>CLI: Err(LayerFailed { events: [..] })
+```
+
+### Sequence — `ExecMode::KeepGoing` (settle then halt)
+
+Each layer runs to completion regardless of failures ; the orchestrator
+halts at the layer boundary if anything failed in the current layer.
+Useful for surfacing all failures of a layer in one run.
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Orch as Orchestrator
+    participant L1a as Action A1
+    participant L1b as Action B1<br/>(fails)
+    participant L1c as Action C1
+    participant L2 as Layer 2
+
+    CLI->>Orch: execute_plan(plan, KeepGoing)
+    par
+        Orch-)L1a: execute()
+    and
+        Orch-)L1b: execute()
+    and
+        Orch-)L1c: execute()
+    end
+    L1b-->>Orch: Err(CommandFailed)
+    L1a-->>Orch: Ok(BuildOutput)
+    L1c-->>Orch: Ok(BuildOutput)
+    Note over Orch: layer settles<br/>1 failure, 2 ok
+    Note over Orch,L2: any err → halt before next layer
+    Orch-->>CLI: Err(LayerFailed { events: [Ok, Err, Ok] })
 ```
 
 ## Status
