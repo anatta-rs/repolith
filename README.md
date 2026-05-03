@@ -34,6 +34,80 @@ The negative scope is **fixed** and will not evolve:
 - Not a hermetic build system — hermeticity is opt-in per action, not
   the default
 
+## Architecture (target — v0.1)
+
+GDD-validated layout for milestone [v0.0.1 — bootstrap M1](https://github.com/anatta-rs/repolith/milestone/1).
+4 crates, 3 traits, layered execution with `FuturesUnordered` + `CancellationToken`.
+
+```mermaid
+graph TD
+    subgraph CORE["crates/repolith-core (lib)"]
+        T_ACT["trait Action<br/>execute → Result&lt;BuildOutput, BuildError&gt;<br/>+ CancellationToken in Ctx"]
+        T_CACHE[trait Cache]
+        T_SRC[trait Source]
+        E_BUILD["BuildError<br/>· UpstreamUnreachable<br/>· CommandFailed{exit, stderr}<br/>· Io · Cancelled"]
+        E_PLAN["PlanError<br/>· Cycle{path}<br/>· MissingDep{from, to}"]
+        EM["ExecMode<br/>FailFast (cancel layer)<br/>KeepGoing (settle then halt)"]
+        P_PLAN[Plan<br/>layers: Vec&lt;Vec&lt;ActionId&gt;&gt;<br/>reasons: HashMap&lt;_, ChangeReason&gt;]
+        T_ORCH[Orchestrator<br/>builder · cache · manifest · registry<br/>max_parallelism · mode]
+        T_TYPES[ActionId · Sha256 · BuildEvent · Ctx]
+        T_MAN[Manifest types<br/>+ AttachedEntry+Direction]
+    end
+
+    subgraph CACHE["crates/repolith-cache-sqlite"]
+        SQL[SqliteCache::open path]
+    end
+    subgraph ACT["crates/repolith-actions (feature-gated)"]
+        F_GIT["GitClone<br/>(feature='git')"]
+        F_CARGO["CargoInstall<br/>(feature='cargo')"]
+    end
+    subgraph CLI["crates/repolith-cli (bin)"]
+        BIN[main.rs · clap]
+        FLAGS["sync flags<br/>--explain · --dry-run<br/>-j N · -k/--keep-going"]
+    end
+
+    SQL -.impl.-> T_CACHE
+    F_GIT -.impl.-> T_ACT
+    F_CARGO -.impl.-> T_ACT
+    BIN --> T_ORCH
+    T_ORCH --> P_PLAN
+    T_ORCH --> EM
+    T_ACT --> E_BUILD
+```
+
+### Sequence — `repolith sync` with `ExecMode::FailFast`
+
+Mid-layer cancellation via `FuturesUnordered` + shared `CancellationToken`
+(NOT `tokio::join_all` — see [#6](https://github.com/anatta-rs/repolith/issues/6)).
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Orch as Orchestrator
+    participant Pool as FuturesUnordered<br/>+ CancellationToken
+    participant A1 as A1 (slow)
+    participant B1 as B1 (fast, fails)
+    participant C1 as C1 (slow)
+
+    CLI->>Orch: execute_plan(plan, FailFast)
+    Orch->>Pool: spawn(A1, B1, C1) with shared cancel
+    par
+        A1->>Pool: poll
+    and
+        B1->>Pool: poll
+    and
+        C1->>Pool: poll
+    end
+    B1-->>Pool: Err(CommandFailed) [first to settle]
+    Pool-->>Orch: yield Err
+    Orch->>Pool: cancel.cancel()
+    Note over A1,C1: tokio::select on cancel<br/>→ Err(Cancelled) immediately
+    A1-->>Pool: Err(Cancelled)
+    C1-->>Pool: Err(Cancelled)
+    Pool-->>Orch: drain remaining (3 events total)
+    Orch-->>CLI: Err(LayerFailed{events}) — layer N+1 NEVER STARTS
+```
+
 ## Status
 
 `0.0.0` is a placeholder. Watch the GitHub repo for milestones.
