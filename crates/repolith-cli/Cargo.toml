@@ -1,0 +1,13 @@
+[package]
+name = "repolith-cli"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "repolith"
+path = "src/main.rs"
+
+[dependencies]

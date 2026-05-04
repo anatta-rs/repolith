@@ -1,6 +1,14 @@
-[package]
-name = "repolith"
-version = "0.0.0"
+[workspace]
+resolver = "3"
+members = [
+    "crates/repolith-cli",
+    "crates/repolith-actions",
+    "crates/repolith-cache",
+    "crates/repolith-core",
+]
+
+[workspace.package]
+version = "0.0.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Multi-repo orchestration for Rust ecosystems (placeholder, in development)."
@@ -10,3 +18,11 @@ authors = ["anatta-rs contributors"]
 readme = "README.md"
 keywords = ["multirepo", "orchestration", "build", "monorepo", "polyrepo"]
 categories = ["development-tools"]
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+all = { level = "warn", priority = -1 }
