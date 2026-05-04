@@ -1,2 +1,10 @@
 /target
 /Cargo.lock
+
+# Anatta `attach`: code → graph artifact bundle (regenerated on every sync).
+.artifacts/
+.a2m
+.claude
+.githooks
+.mcp.json
+VERSION
