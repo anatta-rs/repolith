@@ -7,3 +7,10 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+tokio-util = { version = "0.7", features = ["rt"] }
+hex = "0.4"
+
+[dev-dependencies]
+serde_json = "1.0"
