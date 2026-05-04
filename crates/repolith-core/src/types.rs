@@ -205,7 +205,7 @@ mod tests {
                 assert_eq!(d_id, id);
                 assert_eq!(ms, 100);
             }
-            _ => panic!("Wrong event variant"),
+            BuildEvent::Failed { .. } => panic!("Wrong event variant"),
         }
 
         // BuildEvent::Failed
@@ -222,7 +222,7 @@ mod tests {
                 assert_eq!(d_id, id);
                 assert_eq!(ms, 200);
             }
-            _ => panic!("Wrong event variant"),
+            BuildEvent::Success { .. } => panic!("Wrong event variant"),
         }
     }
 }
