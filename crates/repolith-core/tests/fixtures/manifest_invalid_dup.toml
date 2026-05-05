@@ -1,0 +1,11 @@
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+git = "https://example.com/a.git"
+
+[[node]]
+id = "a"
+git = "https://example.com/a2.git"

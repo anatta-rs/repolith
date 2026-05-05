@@ -1,0 +1,30 @@
+[orchestrator]
+schema_version = "0.1"
+name = "anatta-rs"
+
+[[node]]
+id = "anatta-core"
+git = "https://example.com/anatta-core.git"
+
+  [[node.action]]
+  kind = "git-clone"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "anatta-core"
+  features = ["full"]
+  install_to = "/tmp/anatta/bin"
+
+[[node]]
+id = "anatta-cli"
+path = "/tmp/anatta-cli"
+
+  [[node.action]]
+  kind = "git-clone"
+
+  [[node.action]]
+  kind = "cargo-install"
+
+[[attached]]
+path = "/tmp/tools/x"
+direction = "inbound"
