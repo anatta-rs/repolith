@@ -7,3 +7,5 @@ pub mod types;
 pub mod action;
 /// source of code, usually a git
 pub mod source;
+
+pub mod manifest;

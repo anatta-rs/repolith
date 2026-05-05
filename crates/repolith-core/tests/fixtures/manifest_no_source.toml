@@ -1,0 +1,6 @@
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "orphan"
