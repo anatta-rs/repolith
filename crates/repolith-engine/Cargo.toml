@@ -1,0 +1,19 @@
+[package]
+name = "repolith-engine"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+repolith-core = { path = "../repolith-core" }
+async-trait = "0.1"
+futures = "0.3"
+num_cpus = "1"
+thiserror = "2.0"
+tokio = { version = "1.0", features = ["macros", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+repolith-cache = { path = "../repolith-cache" }
