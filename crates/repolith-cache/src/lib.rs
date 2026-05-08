@@ -1,40 +1,16 @@
-//! Caching traits and implementations for the repolith orchestration engine.
-//! 
-//! This crate defines the `Cache` trait used to store and retrieve build events.
+//! Cache implementations for the repolith orchestration engine.
+//!
+//! The [`Cache`] trait and [`CacheError`] type are defined in
+//! [`repolith_core::cache`] and re-exported here for convenience. This crate
+//! hosts the concrete backends (`SQLite`, in-memory, …) that satisfy the trait.
 
-use repolith_core::types::ActionId;
-use repolith_core::types::BuildEvent;
-use async_trait::async_trait;
-use thiserror::Error;
-
-/// Errors that can occur during cache operations.
-#[derive(Debug, Error)]
-pub enum CacheError {
-    /// An I/O error occurred while accessing the cache.
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-    /// A backend-specific error occurred.
-    #[error("backend: {0}")]
-    Backend(String),
-}
-
-/// A specialized `Result` type for cache operations.
-pub type Result<T> = std::result::Result<T, CacheError>;
-
-/// A trait for storing and retrieving build events.
-#[async_trait]
-pub trait Cache: Send + Sync {
-    /// Retrieves the last recorded build event for a given action ID.
-    async fn last_build(&self, id: &ActionId) -> Option<BuildEvent>;
-    
-    /// Records a new build event in the cache.
-    async fn record(&mut self, event: BuildEvent) -> Result<()>;
-}
+pub use repolith_core::cache::{Cache, CacheError, Result};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use repolith_core::types::Sha256;
+    use async_trait::async_trait;
+    use repolith_core::types::{ActionId, BuildEvent, Sha256};
 
     struct MockCache {
         events: std::collections::HashMap<ActionId, BuildEvent>,
@@ -56,8 +32,7 @@ mod tests {
 
         async fn record(&mut self, event: BuildEvent) -> Result<()> {
             let id = match &event {
-                BuildEvent::Success { id, .. } => id.clone(),
-                BuildEvent::Failed { id, .. } => id.clone(),
+                BuildEvent::Success { id, .. } | BuildEvent::Failed { id, .. } => id.clone(),
             };
             self.events.insert(id, event);
             Ok(())
@@ -68,7 +43,7 @@ mod tests {
     async fn test_mock_cache() {
         let mut cache = MockCache::new();
         let id = ActionId("test-action".to_string());
-        
+
         // Initially empty
         assert!(cache.last_build(&id).await.is_none());
 
@@ -79,7 +54,7 @@ mod tests {
             output: Sha256([1; 32]),
             ms: 100,
         };
-        
+
         cache.record(event.clone()).await.unwrap();
 
         // Retrieve the event
