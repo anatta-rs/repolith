@@ -5,6 +5,7 @@ members = [
     "crates/repolith-actions",
     "crates/repolith-cache",
     "crates/repolith-core",
+    "crates/repolith-engine",
 ]
 
 [workspace.package]
