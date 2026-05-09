@@ -10,6 +10,11 @@ workspace = true
 repolith-core = { path = "../repolith-core" }
 async-trait = "0.1"
 thiserror = "2.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["rt", "macros"] }
+hex = "0.4"
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["macros", "rt"] }
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
+tempfile = "3"

@@ -6,6 +6,10 @@
 
 pub use repolith_core::cache::{Cache, CacheError, Result};
 
+/// SQLite-backed [`Cache`] implementation. See [`sqlite::SqliteCache`].
+pub mod sqlite;
+pub use sqlite::SqliteCache;
+
 #[cfg(test)]
 mod tests {
     use super::*;
