@@ -1,0 +1,16 @@
+[workspace]
+# Standalone — do not get vacuumed into the parent workspace when cargo walks up.
+
+[package]
+name = "hello-world"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+loud = []
+
+[[bin]]
+name = "hello-world"
+path = "src/main.rs"

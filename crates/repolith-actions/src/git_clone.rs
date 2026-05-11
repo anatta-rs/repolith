@@ -8,14 +8,13 @@
 //!
 //! [`Ctx::cancel`]: repolith_core::types::Ctx::cancel
 
+use crate::util::{check_status, run_with_cancel};
 use async_trait::async_trait;
 use repolith_core::action::Action;
 use repolith_core::types::{ActionId, BuildError, BuildOutput, Ctx, Sha256};
 use sha2::{Digest, Sha256 as ShaHasher};
 use std::path::PathBuf;
-use std::process::Output;
 use tokio::process::Command;
-use tokio_util::sync::CancellationToken;
 
 /// Action that mirrors a remote git repository into a local working tree.
 ///
@@ -123,27 +122,3 @@ fn hash_url_and_sha(url: &str, sha1: &str) -> Sha256 {
     Sha256(h.finalize().into())
 }
 
-/// Run a `tokio::process::Command` to completion, racing it against `cancel`.
-/// Returns `BuildError::Cancelled` if the token fires first, or
-/// `BuildError::Io` if the process can't be spawned/waited on.
-async fn run_with_cancel(
-    mut cmd: Command,
-    cancel: &CancellationToken,
-) -> Result<Output, BuildError> {
-    tokio::select! {
-        result = cmd.output() => result.map_err(|e| BuildError::Io(format!("subprocess: {e}"))),
-        () = cancel.cancelled() => Err(BuildError::Cancelled),
-    }
-}
-
-/// Map a non-zero exit status into [`BuildError::CommandFailed`].
-fn check_status(out: &Output) -> Result<(), BuildError> {
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(BuildError::CommandFailed {
-            exit_code: out.status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        })
-    }
-}
