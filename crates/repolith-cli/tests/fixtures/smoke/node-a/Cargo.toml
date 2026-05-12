@@ -1,0 +1,12 @@
+[workspace]
+# Standalone — don't get merged into the parent repolith workspace.
+
+[package]
+name = "node-a"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "node-a"
+path = "src/main.rs"

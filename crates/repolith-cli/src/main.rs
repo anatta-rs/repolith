@@ -189,9 +189,17 @@ async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Resu
         ExecMode::FailFast
     };
 
-    let events = orch.execute_plan(&plan, mode).await?;
-    print_events(&events);
-    Ok(())
+    match orch.execute_plan(&plan, mode).await {
+        Ok(events) => {
+            print_events(&events);
+            Ok(())
+        }
+        Err(repolith_engine::orchestrator::ExecError::LayerFailed { events }) => {
+            print_events(&events);
+            anyhow::bail!("sync failed: see events above");
+        }
+        Err(other) => Err(anyhow::Error::from(other)),
+    }
 }
 
 async fn run_status(cli: &Cli, cancel: CancellationToken) -> Result<()> {

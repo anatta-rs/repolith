@@ -1,0 +1,27 @@
+[orchestrator]
+schema_version = "0.1"
+name = "smoke-failfast"
+
+# Single node with two sequential cargo-install actions. action[0] targets a
+# binary name that does not exist in the source crate → `cargo install --bin
+# nonexistent` exits non-zero, BuildEvent::Failed is recorded. action[1] is
+# in a downstream layer (sequential within-node deps) and must be skipped
+# because the orchestrator halts before starting the next layer.
+#
+# `input_hash` for cargo-install only shells out to `cargo --version` so
+# compute_plan succeeds — the failure happens during execute, which is the
+# code path we actually want to exercise here.
+
+[[node]]
+id = "failing-node"
+path = "${SMOKE_FIXTURE}/node-a"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "definitely-nonexistent-binary"
+  install_to = "${WORKDIR}/bin"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "node-a"
+  install_to = "${WORKDIR}/bin"
