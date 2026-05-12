@@ -1,0 +1,11 @@
+[orchestrator]
+schema_version = "0.1"
+name = "minimal-cli-test"
+
+[[node]]
+id = "local-thing"
+path = "/tmp/repolith-cli-fixture-path"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "local-thing"
