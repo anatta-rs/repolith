@@ -252,6 +252,14 @@ impl Builder {
         self
     }
 
+    /// Register an already-boxed action. Useful when the concrete type is
+    /// only known at runtime (e.g. when assembled from a manifest factory).
+    #[must_use]
+    pub fn register_boxed(mut self, a: Box<dyn Action>) -> Self {
+        self.actions.push(a);
+        self
+    }
+
     /// Finalize.
     ///
     /// # Errors
