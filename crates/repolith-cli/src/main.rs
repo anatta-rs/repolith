@@ -7,8 +7,8 @@
 //! - `sync` — walk the action DAG and rebuild stale entries.
 //! - `status` — print a cache hit/miss table without executing anything.
 //!
-//! Signal handling: a single root [`CancellationToken`] is created in `main`,
-//! passed to the orchestrator via [`Builder::base_ctx`], and watched by a
+//! Signal handling: a single root `CancellationToken` is created in `main`,
+//! passed to the orchestrator via `Builder::base_ctx`, and watched by a
 //! background task that fires it on `SIGINT`/`SIGTERM`. Every action then
 //! short-circuits its in-flight subprocess on the next `.await` poll.
 
@@ -27,7 +27,11 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
-#[command(name = "repolith", version, about = "Multi-repo orchestration for Rust ecosystems")]
+#[command(
+    name = "repolith",
+    version,
+    about = "Multi-repo orchestration for Rust ecosystems"
+)]
 struct Cli {
     /// Path to the manifest file.
     #[arg(long, default_value = "./repolith.toml", global = true)]

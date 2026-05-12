@@ -1,15 +1,15 @@
-//! Orchestrator — drives a [`Plan`] to completion.
+//! Orchestrator — drives a `Plan` to completion.
 //!
 //! `Orchestrator` owns the actions, the cache, and the execution context;
 //! `execute_plan` walks the plan layer by layer, fanning the stale actions
-//! out into a [`FuturesUnordered`] capped by a [`tokio::sync::Semaphore`].
-//! On the first error in [`ExecMode::FailFast`] mode, a shared
-//! [`CancellationToken`] is fired so in-flight peers can short-circuit.
-//! [`ExecMode::KeepGoing`] lets the current layer settle but still halts
+//! out into a `FuturesUnordered` capped by a `tokio::sync::Semaphore`.
+//! On the first error in `ExecMode::FailFast` mode, a shared
+//! `CancellationToken` is fired so in-flight peers can short-circuit.
+//! `ExecMode::KeepGoing` lets the current layer settle but still halts
 //! before the next layer is started.
 //!
 //! **Implementation invariant**: this module never uses
-//! [`futures::future::join_all`] — it would defeat `FailFast` because
+//! `futures::future::join_all` — it would defeat `FailFast` because
 //! `join_all` ignores cancellation and waits for every future to finish.
 
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -35,7 +35,7 @@ pub struct Orchestrator {
     base_ctx: Ctx,
 }
 
-/// Errors raised while executing a [`Plan`].
+/// Errors raised while executing a `Plan`.
 #[derive(Debug, Error)]
 pub enum ExecError {
     /// At least one action in a layer reported an error. The vector contains
@@ -46,7 +46,7 @@ pub enum ExecError {
         /// Every event recorded up to and including the failing layer.
         events: Vec<BuildEvent>,
     },
-    /// Underlying [`Plan::compute`] failure surfaced through the orchestrator.
+    /// Underlying `Plan::compute` failure surfaced through the orchestrator.
     #[error(transparent)]
     Plan(#[from] PlanError),
     /// Cache write failure while persisting an event.
@@ -92,18 +92,18 @@ impl Orchestrator {
         }
     }
 
-    /// Compute the [`Plan`] for the registered actions against the current
+    /// Compute the `Plan` for the registered actions against the current
     /// cache state. Pure: no side effects.
     ///
     /// # Errors
-    /// Forwarded from [`Plan::compute`].
+    /// Forwarded from `Plan::compute`.
     pub async fn compute_plan(&self) -> Result<Plan, PlanError> {
         Plan::compute(&self.actions, self.cache.as_ref(), &self.base_ctx).await
     }
 
     /// Execute every stale action in the plan, layer by layer.
     ///
-    /// Returns the chronological list of [`BuildEvent`]s recorded across all
+    /// Returns the chronological list of `BuildEvent`s recorded across all
     /// executed layers. Cache writes happen **after** each layer settles, so
     /// a crash mid-layer leaves the prior layers persisted.
     ///
@@ -178,8 +178,10 @@ impl Orchestrator {
                     let _permit = sem.acquire().await.expect("semaphore never closed");
                     let started = Instant::now();
                     // Compute the input hash up front so we record it on both Success and Failed.
-                    let input_hash =
-                        action.input_hash(&layer_ctx).await.unwrap_or(Sha256([0; 32]));
+                    let input_hash = action
+                        .input_hash(&layer_ctx)
+                        .await
+                        .unwrap_or(Sha256([0; 32]));
                     let result = action.execute(&layer_ctx).await;
                     (id, started.elapsed(), input_hash, result)
                 }
@@ -275,4 +277,3 @@ impl Builder {
         })
     }
 }
-

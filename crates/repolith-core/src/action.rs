@@ -1,25 +1,25 @@
-use crate::types::{ActionId, BuildError, Ctx, Sha256, BuildOutput};
+use crate::types::{ActionId, BuildError, BuildOutput, Ctx, Sha256};
 use async_trait::async_trait;
 
 /// Represents an executable action within the repolith graph.
-/// 
+///
 /// Actions are the fundamental units of work. They declare their dependencies,
 /// compute their input state, and execute their logic.
-/// 
-/// Note: Long-running `execute` implementations should periodically poll 
+///
+/// Note: Long-running `execute` implementations should periodically poll
 /// `ctx.cancel.is_cancelled()` to support graceful termination.
 #[async_trait]
 pub trait Action: Send + Sync {
     /// Returns the unique identifier for this action.
     fn id(&self) -> ActionId;
-    
+
     /// Returns the list of action IDs that this action depends on.
     fn deps(&self) -> Vec<ActionId>;
-    
+
     /// Computes the hash representing the input state of this action.
     /// This is used for caching and determining if the action needs to run.
     async fn input_hash(&self, ctx: &Ctx) -> Result<Sha256, BuildError>;
-    
+
     /// Executes the action's core logic.
     async fn execute(&self, ctx: &Ctx) -> Result<BuildOutput, BuildError>;
 }
@@ -27,7 +27,6 @@ pub trait Action: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     struct MockAction;
 

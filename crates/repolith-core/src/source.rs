@@ -2,14 +2,14 @@ use crate::types::{BuildError, Sha256};
 use async_trait::async_trait;
 
 /// Represents a source of code or data that can be fetched.
-/// 
+///
 /// A source is typically a remote repository (like Git) that needs to be
 /// synchronized before actions can run.
 #[async_trait]
 pub trait Source: Send + Sync {
     /// Returns the current hash (e.g., commit SHA) of the source.
     async fn current_sha(&self) -> Result<Sha256, BuildError>;
-    
+
     /// Fetches the latest data from the source.
     async fn fetch(&mut self) -> Result<(), BuildError>;
 }

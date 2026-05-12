@@ -8,7 +8,9 @@
 
 mod common;
 
-use common::{add_commit_to_node_a, run_repolith, setup_smoke_fixture, setup_smoke_fixture_failfast};
+use common::{
+    add_commit_to_node_a, run_repolith, setup_smoke_fixture, setup_smoke_fixture_failfast,
+};
 
 fn assert_stdout_contains(out: &std::process::Output, needle: &str) {
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -38,7 +40,8 @@ fn first_run_3_successes() {
     );
     let oks = count_lines_starting_with(&out, "OK   ");
     assert_eq!(
-        oks, 3,
+        oks,
+        3,
         "expected 3 OK lines, got {oks}\nstdout:\n{}",
         String::from_utf8_lossy(&out.stdout)
     );

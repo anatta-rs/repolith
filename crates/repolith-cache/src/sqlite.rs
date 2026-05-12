@@ -6,7 +6,7 @@
 //! `schema.sql` (no migrations in M1 — `IF NOT EXISTS` is the upgrade path).
 //!
 //! `BuildEvent::Failed.error` is stored as JSON in the `error_json` column so
-//! the typed [`BuildError`] survives the roundtrip without lossy stringification.
+//! the typed `BuildError` survives the roundtrip without lossy stringification.
 
 use async_trait::async_trait;
 use repolith_core::cache::{Cache, CacheError, Result};
