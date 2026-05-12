@@ -134,8 +134,13 @@ impl Action for CargoInstall {
                 cmd.args(["--path", p]);
             }
         }
+        // Use `--bin <NAME>` instead of the positional `<CRATE>` argument:
+        // the positional form filters by *package* name and rejects any
+        // mismatch, so packages that expose multiple binaries (or use a
+        // package name different from the binary name) can't be installed.
+        // `--bin` filters by binary target name and works in both cases.
         let crate_name = self.resolved_crate_name();
-        cmd.arg(&crate_name);
+        cmd.args(["--bin", &crate_name]);
         if !self.features.is_empty() {
             cmd.args(["--features", &self.features.join(",")]);
         }

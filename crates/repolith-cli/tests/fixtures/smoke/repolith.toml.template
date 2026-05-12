@@ -1,0 +1,29 @@
+[orchestrator]
+schema_version = "0.1"
+name = "smoke"
+
+[[node]]
+id = "a"
+git = "file://${SMOKE_FIXTURE}/node-a"
+path = "${WORKDIR}/clones/a"
+
+  [[node.action]]
+  kind = "git-clone"
+
+[[node]]
+id = "b"
+path = "${SMOKE_FIXTURE}/node-bc-lib"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "lib-bin-1"
+  install_to = "${WORKDIR}/bin"
+
+[[node]]
+id = "c"
+path = "${SMOKE_FIXTURE}/node-bc-lib"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "lib-bin-2"
+  install_to = "${WORKDIR}/bin"
