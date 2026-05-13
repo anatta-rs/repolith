@@ -60,8 +60,6 @@ path = "../tools/ops-cli"
   crate = "ops"
   install_to = "~/.local/bin"
 
-# An external project tracked as an attached consumer (M1 only supports `inbound`,
-# meaning the orchestrator pulls templates / shared files into it).
-[[attached]]
-path = "../downstream-app"
-direction = "inbound"
+# `[[attached]]` blocks are recognized by the parser for forward
+# compatibility but currently do nothing — they ship with the M2
+# `template_apply` action.

@@ -13,7 +13,6 @@ graph TD
     subgraph CORE["repolith-core (lib)"]
         T_TYPES[ActionId · Sha256 · BuildEvent · Ctx · BuildError · ExecMode]
         T_ACT["trait Action<br/>execute → Result&lt;BuildOutput, BuildError&gt;<br/>+ CancellationToken in Ctx"]
-        T_SRC[trait Source]
         T_CACHE[trait Cache]
         P_PLAN[Plan + ChangeReason<br/>Kahn layers + cascading staleness]
         T_MAN[Manifest types<br/>parser + validator]

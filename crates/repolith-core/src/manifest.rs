@@ -59,16 +59,12 @@ pub struct NodeEntry {
     pub actions: Vec<ActionEntry>,
 }
 
-/// A single `[[attached]]` entry — an external project linked into the orchestrator.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct AttachedEntry {
-    /// Filesystem path of the attached project.
-    pub path: PathBuf,
-    /// Data flow direction relative to the orchestrator.
-    pub direction: Direction,
-}
-
 /// Root manifest document — deserialized from `repolith.toml`.
+///
+/// `[[attached]]` blocks are accepted in the TOML for forward
+/// compatibility but currently ignored (no field is collected). The
+/// `attached` schema is reserved for an M2 `template_apply` action and
+/// will land with that feature.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Manifest {
     /// `[orchestrator]` metadata (schema version, instance name).
@@ -76,9 +72,6 @@ pub struct Manifest {
     /// All `[[node]]` entries declared in the manifest.
     #[serde(default, rename = "node")]
     pub nodes: Vec<NodeEntry>,
-    /// All `[[attached]]` entries declared in the manifest.
-    #[serde(default, rename = "attached")]
-    pub attached: Vec<AttachedEntry>,
 }
 
 /// Tagged variant of `[[node.action]]`, dispatched by the TOML `kind` field
@@ -100,16 +93,6 @@ pub enum ActionEntry {
         #[serde(default)]
         install_to: Option<PathBuf>,
     },
-}
-
-/// Direction of data flow for an attached project. M1 only uses [`Direction::Inbound`].
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Direction {
-    /// Data flows from the attached project into the orchestrator.
-    Inbound,
-    /// Data flows from the orchestrator out to the attached project. Reserved for post-M1.
-    Outbound,
 }
 
 /// Errors that can occur while parsing or validating a manifest.
@@ -294,8 +277,12 @@ impl Manifest {
     }
 }
 
-/// Kebab-case discriminator string for an [`ActionEntry`], matching the TOML `kind` tag.
-fn action_kind(a: &ActionEntry) -> &'static str {
+/// Kebab-case discriminator string for an [`ActionEntry`], matching
+/// the TOML `kind` tag. Public so the CLI's manifest factory uses the
+/// same single source of truth — adding a new action variant therefore
+/// only needs touching this match plus the variant declaration.
+#[must_use]
+pub fn action_kind(a: &ActionEntry) -> &'static str {
     match a {
         ActionEntry::GitClone => "git-clone",
         ActionEntry::CargoInstall { .. } => "cargo-install",

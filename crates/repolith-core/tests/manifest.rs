@@ -1,6 +1,6 @@
 //! Integration tests for the [`repolith_core::manifest`] module.
 
-use repolith_core::manifest::{ActionEntry, Direction, Manifest, ManifestError};
+use repolith_core::manifest::{ActionEntry, Manifest, ManifestError};
 
 const MINIMAL: &str = include_str!("fixtures/manifest_minimal.toml");
 const INVALID_DUP: &str = include_str!("fixtures/manifest_invalid_dup.toml");
@@ -20,7 +20,6 @@ fn test_parse_minimal() {
     assert_eq!(m.nodes[0].id, "a");
     assert_eq!(m.nodes[0].actions.len(), 1);
     assert!(matches!(m.nodes[0].actions[0], ActionEntry::GitClone));
-    assert!(m.attached.is_empty());
 }
 
 #[test]
@@ -68,10 +67,6 @@ fn test_action_ids_format() {
     assert_eq!(ids[1].0, "anatta-core::cargo-install::1");
     assert_eq!(ids[2].0, "anatta-cli::git-clone::0");
     assert_eq!(ids[3].0, "anatta-cli::cargo-install::1");
-
-    // attached entry direction is preserved
-    assert_eq!(m.attached.len(), 1);
-    assert_eq!(m.attached[0].direction, Direction::Inbound);
 }
 
 #[test]
