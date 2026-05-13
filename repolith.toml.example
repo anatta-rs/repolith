@@ -1,64 +1,67 @@
-# Example: orchestrate the anatta-rs stack from a sibling sandbox.
-#
-# Drop this file into the directory where you want sibling clones + tool
-# binaries to land, then run:
+# Example: orchestrate a Rust toolchain spread across multiple sibling
+# repositories. Drop this file into the directory where you want the
+# clones + tool binaries to land, then run:
 #
 #   repolith sync --dry-run --explain    # preview
 #   repolith sync                        # do the work
 #
 # `~` in `install_to` expands to your home directory at execute time.
+#
+# Replace `example-org/...` URLs and the local `path`s with the actual
+# repos / locations for your stack.
 
 [orchestrator]
 schema_version = "0.1"
-name = "anatta-rs"
+name = "my-stack"
 
 # Foundation library — clone-only, no install. Iterations land in ../libs/.
 [[node]]
-id = "anatta-core"
-git = "https://github.com/anatta-rs/anatta-core"
-path = "../libs/anatta-core"
+id = "shared-types"
+git = "https://github.com/example-org/shared-types"
+path = "../libs/shared-types"
 
   [[node.action]]
   kind = "git-clone"
 
-# Engine library that builds on anatta-core.
+# Library that builds on shared-types.
 [[node]]
-id = "anatta-engine"
-git = "https://github.com/anatta-rs/anatta-engine"
-path = "../libs/anatta-engine"
+id = "domain-engine"
+git = "https://github.com/example-org/domain-engine"
+path = "../libs/domain-engine"
 
   [[node.action]]
   kind = "git-clone"
 
-# CLI tool — clone the source, then `cargo install --bin a2m` into ~/.anatta/bin.
+# CLI tool — clone the source, then `cargo install --bin migrate` into ~/.local/bin.
 [[node]]
-id = "ast-to-mermaid"
-git = "https://github.com/anatta-rs/ast-to-mermaid"
-path = "../tools/ast-to-mermaid"
+id = "migration-tool"
+git = "https://github.com/example-org/migration-tool"
+path = "../tools/migration-tool"
 
   [[node.action]]
   kind = "git-clone"
 
   [[node.action]]
   kind = "cargo-install"
-  crate = "a2m"
-  install_to = "~/.anatta/bin"
+  crate = "migrate"
+  install_to = "~/.local/bin"
 
-# Same shape: clone + install the binary.
+# Same shape: clone + install another binary.
 [[node]]
-id = "mermaid-graph"
-git = "https://github.com/anatta-rs/mermaid-graph"
-path = "../tools/mermaid-graph"
+id = "ops-cli"
+git = "https://github.com/example-org/ops-cli"
+path = "../tools/ops-cli"
 
   [[node.action]]
   kind = "git-clone"
 
   [[node.action]]
   kind = "cargo-install"
-  crate = "mermaid-graph"
-  install_to = "~/.anatta/bin"
+  crate = "ops"
+  install_to = "~/.local/bin"
 
-# Anatta itself, attached as a template-pull consumer (M1: only `inbound`).
+# An external project tracked as an attached consumer (M1 only supports `inbound`,
+# meaning the orchestrator pulls templates / shared files into it).
 [[attached]]
-path = "../anatta"
+path = "../downstream-app"
 direction = "inbound"

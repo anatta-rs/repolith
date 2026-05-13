@@ -52,9 +52,9 @@ against regressions.
   `RUSTDOCFLAGS=-D warnings`. Caching via `Swatinem/rust-cache@v2`.
 
 #### Docs ([#13])
-- `repolith.toml.example` at the repo root mirrors the `anatta-rs`
-  stack (4 nodes + 1 attached). The example is parsed by an
-  integration test so docs and code can't drift.
+- `repolith.toml.example` at the repo root demonstrates a typical
+  stack (4 nodes + 1 attached) with placeholder URLs. The example
+  is parsed by an integration test so docs and code can't drift.
 - README "Quick start" with 5 copy-paste steps.
 
 ### Architecture decisions
