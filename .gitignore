@@ -1,5 +1,4 @@
 /target
-/Cargo.lock
 
 # Anatta `attach`: code → graph artifact bundle (regenerated on every sync).
 .artifacts/
