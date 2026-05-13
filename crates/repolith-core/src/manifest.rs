@@ -152,14 +152,21 @@ fn check_no_leading_dash(value: &str, node: &str, field: &str) -> Result<(), Man
     Ok(())
 }
 
-/// Validate `url` against [`ALLOWED_URL_SCHEMES`] and the no-leading-dash
-/// rule. Empty URLs are rejected to keep `git ls-remote ""` from
-/// producing confusing diagnostics.
+/// Validate `url` against [`ALLOWED_URL_SCHEMES`], the no-leading-dash rule
+/// (including for host and path components — so `ssh://-oProxyCommand=evil@h/r`
+/// is rejected), and the no-control-characters rule. Empty URLs are rejected
+/// to keep `git ls-remote ""` from producing confusing diagnostics.
 fn check_url(url: &str, node: &str) -> Result<(), ManifestError> {
     if url.is_empty() {
         return Err(ManifestError::InvalidUrl {
             node: node.to_string(),
             reason: "URL is empty".into(),
+        });
+    }
+    if let Some(c) = url.chars().find(|c| c.is_control()) {
+        return Err(ManifestError::InvalidUrl {
+            node: node.to_string(),
+            reason: format!("URL contains control character U+{:04X}", c as u32),
         });
     }
     if url.starts_with('-') {
@@ -168,14 +175,78 @@ fn check_url(url: &str, node: &str) -> Result<(), ManifestError> {
             reason: format!("`{url}` starts with `-`, would be parsed as a CLI flag"),
         });
     }
-    if !ALLOWED_URL_SCHEMES
+    let scheme = ALLOWED_URL_SCHEMES
         .iter()
-        .any(|scheme| url.starts_with(scheme))
+        .find(|s| url.starts_with(*s))
+        .ok_or_else(|| ManifestError::InvalidUrl {
+            node: node.to_string(),
+            reason: format!("scheme not in allowlist {ALLOWED_URL_SCHEMES:?} (got `{url}`)"),
+        })?;
+
+    // For RFC-3986 URL schemes, parse and check host + each path segment for
+    // a leading `-`. This catches `ssh://-oProxyCommand=evil@host/r.git` and
+    // friends, which `starts_with('-')` on the whole URL misses.
+    // `git@host:org/repo` is SCP-style — not a valid URL — so we walk it
+    // manually instead.
+    if *scheme == "git@" {
+        check_scp_url(url, node)
+    } else {
+        check_rfc_url(url, node)
+    }
+}
+
+fn check_rfc_url(url: &str, node: &str) -> Result<(), ManifestError> {
+    let parsed = url::Url::parse(url).map_err(|e| ManifestError::InvalidUrl {
+        node: node.to_string(),
+        reason: format!("URL parse failed: {e}"),
+    })?;
+    // Userinfo: `ssh://-oProxyCommand=evil@host/r.git` parses with user
+    // `-oProxyCommand=evil`, which git/ssh can be tricked into treating as
+    // a flag depending on version.
+    let user = parsed.username();
+    if user.starts_with('-') {
+        return Err(ManifestError::InvalidUrl {
+            node: node.to_string(),
+            reason: format!("URL userinfo `{user}` starts with `-`"),
+        });
+    }
+    if let Some(host) = parsed.host_str()
+        && host.starts_with('-')
     {
         return Err(ManifestError::InvalidUrl {
             node: node.to_string(),
-            reason: format!("scheme not in allowlist {ALLOWED_URL_SCHEMES:?} (got `{url}`)"),
+            reason: format!("host `{host}` starts with `-`"),
         });
+    }
+    if let Some(segments) = parsed.path_segments() {
+        for s in segments {
+            if s.starts_with('-') {
+                return Err(ManifestError::InvalidUrl {
+                    node: node.to_string(),
+                    reason: format!("path segment `{s}` starts with `-`"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_scp_url(url: &str, node: &str) -> Result<(), ManifestError> {
+    let after_at = &url["git@".len()..];
+    let (host, path) = after_at.split_once(':').unwrap_or((after_at, ""));
+    if host.is_empty() || host.starts_with('-') {
+        return Err(ManifestError::InvalidUrl {
+            node: node.to_string(),
+            reason: format!("host `{host}` is empty or starts with `-`"),
+        });
+    }
+    for segment in path.split('/') {
+        if segment.starts_with('-') {
+            return Err(ManifestError::InvalidUrl {
+                node: node.to_string(),
+                reason: format!("path segment `{segment}` starts with `-`"),
+            });
+        }
     }
     Ok(())
 }
