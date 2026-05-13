@@ -7,6 +7,9 @@ const INVALID_DUP: &str = include_str!("fixtures/manifest_invalid_dup.toml");
 const INVALID_SCHEMA: &str = include_str!("fixtures/manifest_invalid_schema.toml");
 const NO_SOURCE: &str = include_str!("fixtures/manifest_no_source.toml");
 const FULL: &str = include_str!("fixtures/manifest_full.toml");
+/// The user-facing example committed at the repo root must always parse —
+/// regression-locks the docs against drift in the manifest schema.
+const EXAMPLE: &str = include_str!("../../../repolith.toml.example");
 
 #[test]
 fn test_parse_minimal() {
@@ -69,4 +72,26 @@ fn test_action_ids_format() {
     // attached entry direction is preserved
     assert_eq!(m.attached.len(), 1);
     assert_eq!(m.attached[0].direction, Direction::Inbound);
+}
+
+#[test]
+fn test_example_fixture_parses() {
+    // The committed `repolith.toml.example` at the repo root must always
+    // parse + validate — protects the README's quick-start from rotting.
+    let m = Manifest::from_toml(EXAMPLE).expect("repolith.toml.example must parse");
+    assert_eq!(m.orchestrator.name, "anatta-rs");
+    assert!(
+        !m.nodes.is_empty(),
+        "example must showcase at least one node"
+    );
+    // Action ids must follow the documented `{node.id}::{kind}::{idx}` format.
+    for id in m.action_ids() {
+        let segments: Vec<&str> = id.0.split("::").collect();
+        assert_eq!(
+            segments.len(),
+            3,
+            "action id `{}` must have 3 ::-separated segments",
+            id.0
+        );
+    }
 }

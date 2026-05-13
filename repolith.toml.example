@@ -1,0 +1,64 @@
+# Example: orchestrate the anatta-rs stack from a sibling sandbox.
+#
+# Drop this file into the directory where you want sibling clones + tool
+# binaries to land, then run:
+#
+#   repolith sync --dry-run --explain    # preview
+#   repolith sync                        # do the work
+#
+# `~` in `install_to` expands to your home directory at execute time.
+
+[orchestrator]
+schema_version = "0.1"
+name = "anatta-rs"
+
+# Foundation library — clone-only, no install. Iterations land in ../libs/.
+[[node]]
+id = "anatta-core"
+git = "https://github.com/anatta-rs/anatta-core"
+path = "../libs/anatta-core"
+
+  [[node.action]]
+  kind = "git-clone"
+
+# Engine library that builds on anatta-core.
+[[node]]
+id = "anatta-engine"
+git = "https://github.com/anatta-rs/anatta-engine"
+path = "../libs/anatta-engine"
+
+  [[node.action]]
+  kind = "git-clone"
+
+# CLI tool — clone the source, then `cargo install --bin a2m` into ~/.anatta/bin.
+[[node]]
+id = "ast-to-mermaid"
+git = "https://github.com/anatta-rs/ast-to-mermaid"
+path = "../tools/ast-to-mermaid"
+
+  [[node.action]]
+  kind = "git-clone"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "a2m"
+  install_to = "~/.anatta/bin"
+
+# Same shape: clone + install the binary.
+[[node]]
+id = "mermaid-graph"
+git = "https://github.com/anatta-rs/mermaid-graph"
+path = "../tools/mermaid-graph"
+
+  [[node.action]]
+  kind = "git-clone"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "mermaid-graph"
+  install_to = "~/.anatta/bin"
+
+# Anatta itself, attached as a template-pull consumer (M1: only `inbound`).
+[[attached]]
+path = "../anatta"
+direction = "inbound"

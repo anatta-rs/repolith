@@ -6,6 +6,37 @@ This crate name is **reserved on crates.io**. The real implementation is
 incubating in [`anatta-rs/anatta`](https://github.com/anatta-rs/anatta)
 and will land here once the API stabilizes (target: 0.1.0).
 
+## Quick start
+
+```bash
+# 1. Clone repolith
+git clone https://github.com/anatta-rs/repolith && cd repolith
+
+# 2. Build the binary
+cargo build --release
+cp target/release/repolith ~/.local/bin/   # or any dir on $PATH
+
+# 3. Copy the example into the directory where you want sibling
+#    clones + tool binaries to land, then edit it for your stack
+mkdir -p ../my-org && cd ../my-org
+cp ../repolith/repolith.toml.example ./repolith.toml
+$EDITOR repolith.toml
+
+# 4. See what would happen — without doing anything
+repolith sync --dry-run --explain
+
+# 5. Go
+repolith sync
+```
+
+`repolith status` prints a cache hit/miss table you can read at any
+time without running anything. `repolith sync -k` keeps a layer running
+after a failure (useful for surfacing every failure of a layer in one
+pass).
+
+See [`repolith.toml.example`](repolith.toml.example) for a full manifest
+mirroring the `anatta-rs/*` stack.
+
 ## What repolith will be
 
 A declarative, content-addressed orchestrator for Rust projects spread
@@ -147,7 +178,29 @@ sequenceDiagram
 
 ## Status
 
-`0.0.0` is a placeholder. Watch the GitHub repo for milestones.
+**M1 — bootstrap (v0.0.1) shipped.** 5 crates, 2 builtin actions,
+parallel layered execution with cancellation, SQLite-backed cache.
+
+- `repolith-core` — types, traits (`Action`, `Source`, `Cache`),
+  manifest parser, layered `Plan`.
+- `repolith-cache` — `SqliteCache` (rusqlite, bundled).
+- `repolith-engine` — async `Orchestrator` (`FuturesUnordered` +
+  `CancellationToken` + `Semaphore`), `FailFast` / `KeepGoing` modes.
+- `repolith-actions` — `GitClone` (feature `git`), `CargoInstall`
+  (feature `cargo`).
+- `repolith-cli` — `repolith init|sync|status` with `-j N`,
+  `-k/--keep-going`, `--explain`, `--dry-run`.
+
+55 workspace tests green ; CI runs `fmt + clippy -D warnings + test +
+doc -D warnings` on every PR. See [`CHANGELOG.md`](CHANGELOG.md) for
+the per-issue breakdown.
+
+### Roadmap
+
+- **M2** — federation `kind = "repolith"` (orchestrator-of-orchestrators),
+  Neo4j cache backend, `docker` action.
+- **M3** — watch mode (re-plan on file change),
+  `template_apply` action driving `AttachedEntry::Outbound`.
 
 ## License
 
