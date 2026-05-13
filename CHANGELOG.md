@@ -69,6 +69,24 @@ Pre-1.0 cleanup; restored when the M2 features that need them land.
   to `install_to`, so manifests using `~`-prefixed sibling clone paths
   no longer create literal `~` directories.
 
+### Post-release audit hardening
+
+A full second-pass audit on the v0.0.2 tag surfaced 12 must-fix items
+that landed in four follow-up PRs (PRs [#37], [#39], [#41], [#43]).
+They are reflected in the per-section entries above plus the prose
+alignments in [#43]; none changes public API.
+
+[#36] · [#37] · [#38] · [#39] · [#40] · [#41] · [#42] · [#43]
+
+[#36]: https://github.com/anatta-rs/repolith/issues/36
+[#37]: https://github.com/anatta-rs/repolith/pull/37
+[#38]: https://github.com/anatta-rs/repolith/issues/38
+[#39]: https://github.com/anatta-rs/repolith/pull/39
+[#40]: https://github.com/anatta-rs/repolith/issues/40
+[#41]: https://github.com/anatta-rs/repolith/pull/41
+[#42]: https://github.com/anatta-rs/repolith/issues/42
+[#43]: https://github.com/anatta-rs/repolith/pull/43
+
 ## [0.0.1] - 2026-05-13
 
 ### Added — M1 bootstrap

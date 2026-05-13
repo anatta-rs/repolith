@@ -1,10 +1,12 @@
 //! Core types, traits, manifest parser, and plan computation for repolith.
 //!
-//! This crate is the foundation of the workspace. It deliberately carries
-//! **no async runtime dependency** (no `tokio`, no `futures`) — the
-//! parallel execution layer lives one crate up in `repolith-engine`. The
-//! split lets downstream consumers (CLI, future TUI/LSP, telemetry) pull
-//! the lightweight types here without dragging the runtime tree.
+//! This crate is the foundation of the workspace. It carries **no `tokio`
+//! runtime dependency** — only lightweight runtime-agnostic combinators
+//! from `futures` (used inside `Plan::compute` to fan probes out
+//! concurrently). The orchestrator + executor live one crate up in
+//! `repolith-engine`, which pulls in `tokio`. The split lets downstream
+//! consumers (CLI, future TUI/LSP, telemetry) pull the lightweight types
+//! here without dragging the runtime tree.
 //!
 //! # Modules at a glance
 //!

@@ -1,10 +1,12 @@
 # Architecture
 
 `repolith` is a 5-crate workspace. The split follows a strict
-foundation → runtime layering: `repolith-core` is a pure
-types/traits crate with no async runtime dependencies, and the
-async machinery (`tokio`, `futures`, cancellation primitives) lives
-one layer up in `repolith-engine`.
+foundation → runtime layering: `repolith-core` is a types/traits
+crate with no `tokio` runtime dependency — it uses only the
+runtime-agnostic `futures` combinators inside `Plan::compute` to
+fan input-hash probes out concurrently. The `tokio` runtime itself,
+the `Orchestrator`, and the bounded-parallelism semaphore live one
+layer up in `repolith-engine`.
 
 ## Crate graph
 
