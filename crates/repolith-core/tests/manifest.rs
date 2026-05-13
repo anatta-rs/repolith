@@ -98,3 +98,150 @@ fn test_example_fixture_parses() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Argument-injection (CWE-88) negative tests — every user-controlled string
+// that ultimately reaches a `git` / `cargo` subprocess must be rejected at
+// parse time when it would be interpreted as a CLI flag or a list separator.
+// ---------------------------------------------------------------------------
+
+fn parse_err(toml: &str) -> ManifestError {
+    Manifest::from_toml(toml).expect_err("manifest must fail validation")
+}
+
+#[test]
+fn test_reject_url_with_leading_dash() {
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+git = "--upload-pack=touch /tmp/pwn"
+path = "./a"
+
+  [[node.action]]
+  kind = "git-clone"
+"#;
+    match parse_err(toml) {
+        ManifestError::InvalidUrl { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("starts with `-`"),
+                "expected leading-dash reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidUrl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_url_with_unknown_scheme() {
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+git = "ext::sh -c id"
+path = "./a"
+
+  [[node.action]]
+  kind = "git-clone"
+"#;
+    match parse_err(toml) {
+        ManifestError::InvalidUrl { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("scheme not in allowlist"),
+                "expected scheme reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidUrl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_crate_name_with_leading_dash() {
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+path = "./a"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "--config=net.git-fetch-with-cli=true"
+"#;
+    match parse_err(toml) {
+        ManifestError::InvalidArg { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("starts with `-`"),
+                "expected leading-dash reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_feature_with_comma_injection() {
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+path = "./a"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "ok"
+  features = ["loud,--target-dir=/etc"]
+"#;
+    match parse_err(toml) {
+        ManifestError::InvalidArg { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("contains `,`"),
+                "expected comma-injection reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_feature_with_leading_dash() {
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+path = "./a"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "ok"
+  features = ["--target-dir=/etc"]
+"#;
+    match parse_err(toml) {
+        ManifestError::InvalidArg { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("starts with `-`"),
+                "expected leading-dash reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}
