@@ -13,9 +13,10 @@ to track `main` and pull fixes as they land.
 
 ## Reporting a vulnerability
 
-**Do not open a public GitHub issue for vulnerabilities.** Email
-[the maintainers](https://github.com/anatta-rs/repolith/blob/main/Cargo.toml)
-(use the `authors` field for the contact list) with:
+**Do not open a public GitHub issue for vulnerabilities.** Use GitHub's
+private vulnerability reporting:
+[`anatta-rs/repolith/security/advisories/new`](https://github.com/anatta-rs/repolith/security/advisories/new).
+Include:
 
 - The `repolith --version` you reproduced against.
 - The smallest `repolith.toml` that triggers the issue.
@@ -42,13 +43,16 @@ contributors you don't fully trust (e.g. via PR), treat manifest review
 as you would treat reviewing a new shell script that runs `git`,
 `cargo`, and writes to disk.
 
-### What's hardened in M1
+### What's hardened today
 
 - **Argument injection (CWE-88)** — `node.git` URLs are validated against
-  a scheme allowlist (`https://`, `http://`, `ssh://`, `git@`, `file://`)
-  and rejected if they start with `-` (which `git` would interpret as a
-  flag). Crate names and feature names that start with `-` or contain
-  `,` are rejected at manifest parse time.
+  a scheme allowlist (`https://`, `http://`, `ssh://`, `git@`, `file://`),
+  rejected if the URL itself, its userinfo, host, or any path segment
+  starts with `-` (which `git` / `ssh` would interpret as a flag), and
+  rejected if the URL contains any control character. Subprocess invocations
+  insert a literal `--` argv separator before the user-supplied URL as
+  defense in depth. Crate names and feature names that start with `-` or
+  contain `,` are rejected at manifest parse time.
 - **Environment leak (CWE-200)** — the orchestrator's `Ctx::env` only
   carries an allowlisted subset of the parent process env (`PATH`,
   `HOME`, `USER`, `SHELL`, `TMPDIR`, `CARGO_HOME`, `RUSTUP_HOME`,
@@ -61,11 +65,13 @@ as you would treat reviewing a new shell script that runs `git`,
   parameterized queries; no string concatenation reaches the SQLite
   driver.
 - **Stable cancellation** — every spawned subprocess races against a
-  shared `CancellationToken` so `Ctrl-C` (and SIGTERM in M2)
-  short-circuits the orchestrator without leaving zombie git/cargo
-  processes (PR3).
+  shared `CancellationToken` so both `Ctrl-C` (SIGINT) and SIGTERM
+  short-circuit the orchestrator without leaving zombie git/cargo
+  processes. On Unix, children are placed in their own process group
+  and the group is signalled (SIGTERM → grace → SIGKILL) so cargo's
+  `rustc`/linker grandchildren are reaped, not just the direct child.
 
-### Known M1 limitations (deferred to M2)
+### Known limitations (deferred to M2)
 
 These are real risks under a hostile-manifest threat model, *not*
 exploitable by a benign typo. They're called out so operators can make
@@ -80,11 +86,13 @@ informed deployment decisions.
   M2 will add a configurable sandbox root (defaulting to `~/.repolith`
   for installs and `./` for clones) with an explicit opt-out for
   trusted manifests.
-- **Subprocess argument injection beyond URL/crate/features** — the
-  `node.git` allowlist covers the URL itself, but the orchestrator
-  doesn't probe deeper into git's URL grammar (e.g. `core.sshCommand`
-  configured at clone time via a hostile config). Use `https://` URLs
-  with vetted hosts.
+- **Subprocess argument injection beyond URL grammar** — the URL,
+  userinfo, host, and path-segment leading-dash checks cover everything
+  that reaches argv as a positional, but the orchestrator doesn't probe
+  deeper into git's *runtime* config surface (e.g. `core.sshCommand`
+  injected via a hostile per-repo `.git/config` after the first fetch,
+  or via a `~/.gitconfig` an attacker controls). Use `https://` URLs
+  with vetted hosts when running against untrusted networks.
 - **Resource exhaustion** — a manifest declaring tens of thousands of
   nodes will allocate proportionally; there's no per-manifest cap. The
   semaphore caps *concurrent* in-flight subprocesses, not total work.
