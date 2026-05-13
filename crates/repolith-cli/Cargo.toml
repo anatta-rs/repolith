@@ -19,10 +19,10 @@ name = "repolith"
 path = "src/main.rs"
 
 [dependencies]
-repolith-core = { path = "../repolith-core", version = "0.0.1" }
-repolith-cache = { path = "../repolith-cache", version = "0.0.1" }
-repolith-engine = { path = "../repolith-engine", version = "0.0.1" }
-repolith-actions = { path = "../repolith-actions", version = "0.0.1", features = ["git", "cargo"] }
+repolith-core = { path = "../repolith-core", version = "0.0.2" }
+repolith-cache = { path = "../repolith-cache", version = "0.0.2" }
+repolith-engine = { path = "../repolith-engine", version = "0.0.2" }
+repolith-actions = { path = "../repolith-actions", version = "0.0.2", features = ["git", "cargo"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 comfy-table = "7"
