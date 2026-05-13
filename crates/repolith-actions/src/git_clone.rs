@@ -55,11 +55,21 @@ impl Action for GitClone {
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
+        // `git ls-remote` returning exit 0 with empty stdout (repo with no
+        // HEAD, or a server quirk) used to silently produce an empty SHA1 —
+        // and a stable bogus `input_hash` that made re-runs look "up to date"
+        // forever. Reject explicitly so the user sees the problem.
         let sha1 = String::from_utf8_lossy(&out.stdout)
             .split_whitespace()
             .next()
             .unwrap_or_default()
             .to_string();
+        if sha1.is_empty() {
+            return Err(BuildError::UpstreamUnreachable(format!(
+                "git ls-remote {} returned no HEAD",
+                self.repo_url
+            )));
+        }
         Ok(hash_url_and_sha(&self.repo_url, &sha1))
     }
 

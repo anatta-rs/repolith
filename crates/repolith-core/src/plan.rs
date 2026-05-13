@@ -12,8 +12,9 @@
 use crate::action::Action;
 use crate::cache::Cache;
 use crate::types::{ActionId, BuildError, BuildEvent, Ctx, Sha256};
-use futures::future::join_all;
+use futures::future::{Either, join_all, select};
 use std::collections::{HashMap, HashSet};
+use std::pin::pin;
 use thiserror::Error;
 
 /// Immutable, topologically-layered execution plan.
@@ -187,12 +188,21 @@ impl Plan {
                 .iter()
                 .map(|id| (id.clone(), by_id[id].as_ref()))
                 .collect();
-            let hash_results: Vec<(ActionId, Result<Sha256, BuildError>)> = join_all(
-                action_probes
-                    .into_iter()
-                    .map(|(id, action)| async move { (id, action.input_hash(ctx).await) }),
-            )
-            .await;
+            // Inner cancel: race each probe future against `ctx.cancel`. The
+            // outer layer-edge check above only catches cancel *between*
+            // layers; this catches it *during* a layer's fan-out (e.g. when
+            // 50 nodes are mid-`git ls-remote` and Ctrl-C is pressed).
+            let hash_results: Vec<(ActionId, Result<Sha256, BuildError>)> =
+                join_all(action_probes.into_iter().map(|(id, action)| async move {
+                    let probe = pin!(action.input_hash(ctx));
+                    let cancel = pin!(ctx.cancel.cancelled());
+                    let result = match select(probe, cancel).await {
+                        Either::Left((r, _)) => r,
+                        Either::Right(((), _)) => Err(BuildError::Cancelled),
+                    };
+                    (id, result)
+                }))
+                .await;
             let cached: Vec<(ActionId, Option<BuildEvent>)> = join_all(layer.iter().map(|id| {
                 let id = id.clone();
                 async move { (id.clone(), cache.last_build(&id).await) }
