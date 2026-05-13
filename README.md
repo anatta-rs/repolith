@@ -80,8 +80,15 @@ in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 ## Status
 
 **M1 — bootstrap (v0.0.1) shipped.** 5 crates, 2 builtin actions,
-parallel layered execution with cancellation, SQLite cache, 55
-workspace tests, CI on every PR.
+parallel layered execution with cancellation, SQLite cache, ~60
+workspace tests.
+
+> **CI status.** GitHub Actions runs are temporarily paused while the
+> upstream Actions billing is being sorted out — the workflow in
+> [`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the canonical gate
+> (`cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+> `cargo test --workspace --all-features`, `cargo doc` with `RUSTDOCFLAGS=-D warnings`).
+> Run it locally before opening a PR.
 
 | Crate | Purpose |
 |---|---|
