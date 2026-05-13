@@ -74,9 +74,15 @@ pub struct Builder {
 impl Orchestrator {
     /// Start a fresh [`Builder`].
     ///
-    /// The default `max_parallelism` is `num_cpus::get()`, the default
+    /// The default `max_parallelism` is `num_cpus::get()`. The default
     /// `base_ctx` uses a fresh [`CancellationToken`], `current_dir()` for
-    /// `workdir`, and the inherited process env.
+    /// `workdir`, and an **empty** env map. SDK/library consumers must
+    /// explicitly call [`Builder::base_ctx`] with an allowlisted env (the
+    /// CLI does this via `filtered_env()`) — defaulting to a snapshot of
+    /// the parent process env would leak secrets like `GITHUB_TOKEN` /
+    /// `AWS_SECRET_ACCESS_KEY` through any future `tracing::debug!(?ctx)`
+    /// or panic dump (CWE-200). This is the engine-layer counterpart to
+    /// the CLI's existing env allowlist.
     #[must_use]
     pub fn builder() -> Builder {
         Builder {
@@ -87,7 +93,7 @@ impl Orchestrator {
             base_ctx: Ctx {
                 cancel: CancellationToken::new(),
                 workdir: std::env::current_dir().unwrap_or_default(),
-                env: std::env::vars().collect(),
+                env: std::collections::HashMap::new(),
             },
         }
     }
@@ -290,5 +296,39 @@ impl Builder {
             max_parallelism: self.max_parallelism,
             base_ctx: self.base_ctx,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use repolith_core::cache::Result as CacheResult;
+
+    struct StubCache;
+    #[async_trait::async_trait]
+    impl Cache for StubCache {
+        async fn last_build(&self, _id: &ActionId) -> Option<BuildEvent> {
+            None
+        }
+        async fn record(&mut self, _event: BuildEvent) -> CacheResult<()> {
+            Ok(())
+        }
+    }
+
+    /// CWE-200 — `Orchestrator::builder()` default `base_ctx.env` must be
+    /// empty. Library consumers that forget `.base_ctx(...)` can't inherit
+    /// `GITHUB_TOKEN` / `AWS_SECRET_ACCESS_KEY` from the parent process
+    /// into `Ctx`. The CLI overrides via `filtered_env()`.
+    #[test]
+    fn builder_default_env_is_empty() {
+        let orch = Orchestrator::builder()
+            .cache(StubCache)
+            .build()
+            .expect("build");
+        assert!(
+            orch.base_ctx.env.is_empty(),
+            "default builder env must be empty, got keys: {:?}",
+            orch.base_ctx.env.keys().collect::<Vec<_>>()
+        );
     }
 }
