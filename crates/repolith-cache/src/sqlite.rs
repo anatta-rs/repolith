@@ -38,6 +38,7 @@ impl SqliteCache {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path).map_err(|e| CacheError::Backend(e.to_string()))?;
+        Self::configure_pragmas(&conn)?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| CacheError::Backend(e.to_string()))?;
         Ok(Self {
@@ -52,11 +53,38 @@ impl SqliteCache {
     /// connection or apply the schema (extremely unlikely in practice).
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().map_err(|e| CacheError::Backend(e.to_string()))?;
+        // WAL is meaningless for `:memory:` databases, but `busy_timeout`
+        // and `synchronous=NORMAL` are still applied for consistency with
+        // file-backed caches.
+        Self::configure_pragmas(&conn)?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| CacheError::Backend(e.to_string()))?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    /// Apply the standard pragma set so concurrent `repolith sync`
+    /// invocations against the same cache file don't deadlock with
+    /// `SQLITE_BUSY`.
+    ///
+    /// - `journal_mode = WAL` — readers don't block writers, writers don't
+    ///   block readers. The `-wal` and `-shm` sidecar files appear next to
+    ///   `cache.db` automatically.
+    /// - `synchronous = NORMAL` — durable enough for a build cache (no
+    ///   per-commit fsync), an order of magnitude faster than `FULL`.
+    /// - `busy_timeout = 5000` — wait up to 5 s on lock contention before
+    ///   returning `SQLITE_BUSY`.
+    fn configure_pragmas(conn: &Connection) -> Result<()> {
+        // `journal_mode` returns the new mode; we ignore the result but the
+        // `query_row` call is what actually drives the pragma.
+        conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))
+            .map_err(|e| CacheError::Backend(format!("set journal_mode=WAL: {e}")))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|e| CacheError::Backend(format!("set synchronous=NORMAL: {e}")))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| CacheError::Backend(format!("set busy_timeout: {e}")))?;
+        Ok(())
     }
 }
 

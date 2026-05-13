@@ -17,7 +17,7 @@ use repolith_core::action::Action;
 use repolith_core::cache::{Cache, CacheError};
 use repolith_core::manifest::Manifest;
 use repolith_core::plan::{Plan, PlanError};
-use repolith_core::types::{ActionId, BuildEvent, Ctx, ExecMode, Sha256};
+use repolith_core::types::{ActionId, BuildEvent, Ctx, ExecMode};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -129,7 +129,7 @@ impl Orchestrator {
                 continue;
             }
 
-            let layer_events = self.execute_layer(&stale, mode, &sem).await;
+            let layer_events = self.execute_layer(&stale, plan, mode, &sem).await;
 
             // Persist whatever this layer produced before deciding to halt.
             for ev in &layer_events {
@@ -153,6 +153,7 @@ impl Orchestrator {
     async fn execute_layer(
         &self,
         stale_ids: &[ActionId],
+        plan: &Plan,
         mode: ExecMode,
         sem: &Arc<Semaphore>,
     ) -> Vec<BuildEvent> {
@@ -173,15 +174,19 @@ impl Orchestrator {
             .map(|(id, action)| {
                 let sem = Arc::clone(sem);
                 let layer_ctx = layer_ctx.clone();
+                // Reuse the input hash captured during `Plan::compute` —
+                // saves a second `git ls-remote` / `cargo --version` per
+                // action and means a network failure here surfaces as a
+                // typed `BuildEvent::Failed` rather than a silent
+                // `Sha256([0; 32])` poison value (was masking input_hash
+                // errors entirely).
+                let input_hash = plan
+                    .input_hash(&id)
+                    .expect("stale id must have been planned with an input_hash");
                 async move {
                     // Acquire concurrency permit — yields when the layer is wider than the limit.
                     let _permit = sem.acquire().await.expect("semaphore never closed");
                     let started = Instant::now();
-                    // Compute the input hash up front so we record it on both Success and Failed.
-                    let input_hash = action
-                        .input_hash(&layer_ctx)
-                        .await
-                        .unwrap_or(Sha256([0; 32]));
                     let result = action.execute(&layer_ctx).await;
                     (id, started.elapsed(), input_hash, result)
                 }

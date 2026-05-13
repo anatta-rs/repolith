@@ -167,7 +167,10 @@ impl Action for CargoInstall {
 
         // output_hash = sha256(installed binary file content). Fail loudly if
         // the binary cannot be read — silent fallback would mask cargo regressions.
-        let bin = self.install_to.join("bin").join(&crate_name);
+        // Use `install_root` (the tilde-expanded path) to match where cargo
+        // actually wrote the binary; reading from `self.install_to` would
+        // otherwise look up a literal `~` directory and always fail.
+        let bin = install_root.join("bin").join(&crate_name);
         let bytes = std::fs::read(&bin)
             .map_err(|e| BuildError::Io(format!("read installed binary {}: {e}", bin.display())))?;
         let mut h = ShaHasher::new();

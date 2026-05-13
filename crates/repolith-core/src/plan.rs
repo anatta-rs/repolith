@@ -12,6 +12,7 @@
 use crate::action::Action;
 use crate::cache::Cache;
 use crate::types::{ActionId, BuildError, BuildEvent, Ctx, Sha256};
+use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -24,6 +25,10 @@ use thiserror::Error;
 pub struct Plan {
     layers: Vec<Vec<ActionId>>,
     reasons: HashMap<ActionId, ChangeReason>,
+    /// Input hash captured at `Plan::compute` time, keyed by action id.
+    /// Stored so the orchestrator can reuse it without re-running every
+    /// action's `input_hash` (which may shell out to git/cargo).
+    input_hashes: HashMap<ActionId, Sha256>,
 }
 
 /// Why a given action is considered stale and needs to re-run.
@@ -151,47 +156,112 @@ impl Plan {
 
         // 3. Compute ChangeReason per action, walking layers in order so a
         //    stale ancestor is already marked when we look at its children.
+        //
+        //    Within each layer the per-action `input_hash` and
+        //    `cache.last_build` calls are independent — they may shell out
+        //    (`git ls-remote`, `cargo --version`) so running them
+        //    concurrently turns wall-clock from `sum(latency)` into
+        //    `max(latency)`. The cascade pass that uses the results is
+        //    sequential because layer N reads `stale` populated by layer
+        //    N-1.
         let by_id: HashMap<ActionId, &Box<dyn Action>> =
             actions.iter().map(|a| (a.id(), a)).collect();
         let mut reasons: HashMap<ActionId, ChangeReason> = HashMap::new();
         let mut stale: HashSet<ActionId> = HashSet::new();
+        let mut input_hashes: HashMap<ActionId, Sha256> = HashMap::new();
 
         for layer in &layers {
+            // Spawn all per-action probes concurrently. Pre-materialize
+            // (id, action) and (id, ()) tuples so each future owns its own
+            // pieces — the alternative (capturing `by_id` / `cache` in the
+            // closure) hits the FnMut "moved value" borrow checker because
+            // `.map()` reuses the closure across iterations.
+            let action_probes: Vec<(ActionId, &dyn Action)> = layer
+                .iter()
+                .map(|id| (id.clone(), by_id[id].as_ref()))
+                .collect();
+            let hash_results: Vec<(ActionId, Result<Sha256, BuildError>)> = join_all(
+                action_probes
+                    .into_iter()
+                    .map(|(id, action)| async move { (id, action.input_hash(ctx).await) }),
+            )
+            .await;
+            let cached: Vec<(ActionId, Option<BuildEvent>)> = join_all(layer.iter().map(|id| {
+                let id = id.clone();
+                async move { (id.clone(), cache.last_build(&id).await) }
+            }))
+            .await;
+
+            // Materialize results into maps so we can match them up by id
+            // in the deterministic cascade pass below.
+            let mut hashes_now: HashMap<ActionId, Sha256> = HashMap::new();
+            for (id, result) in hash_results {
+                let now = result?;
+                hashes_now.insert(id, now);
+            }
+            let cached_map: HashMap<ActionId, Option<BuildEvent>> = cached.into_iter().collect();
+
+            // Sequential cascade — order matters because `UpstreamMoved`
+            // depends on the `stale` set populated by earlier ids.
             for id in layer {
-                let a = by_id[id];
-                let now = a.input_hash(ctx).await?;
-                match cache.last_build(id).await {
-                    None => {
-                        reasons.insert(id.clone(), ChangeReason::NoCachedBuild);
-                        stale.insert(id.clone());
-                    }
-                    Some(BuildEvent::Failed { .. }) => {
-                        // Failed builds always re-run.
-                        reasons.insert(id.clone(), ChangeReason::NoCachedBuild);
-                        stale.insert(id.clone());
-                    }
-                    Some(BuildEvent::Success { input, .. }) if input != now => {
-                        reasons.insert(
-                            id.clone(),
-                            ChangeReason::InputHashChanged {
-                                from: input,
-                                to: now,
-                            },
-                        );
-                        stale.insert(id.clone());
-                    }
-                    Some(BuildEvent::Success { .. }) => {
-                        // Hash unchanged — cascade if any dep is stale.
-                        if let Some(stale_dep) = a.deps().into_iter().find(|d| stale.contains(d)) {
-                            reasons
-                                .insert(id.clone(), ChangeReason::UpstreamMoved { dep: stale_dep });
-                            stale.insert(id.clone());
-                        }
-                    }
+                let now = hashes_now[id];
+                input_hashes.insert(id.clone(), now);
+                let last = cached_map.get(id).and_then(Option::as_ref);
+                if let Some(reason) = classify(id, by_id[id].as_ref(), now, last, &stale) {
+                    reasons.insert(id.clone(), reason);
+                    stale.insert(id.clone());
                 }
             }
         }
 
-        Ok(Self { layers, reasons })
+        Ok(Self {
+            layers,
+            reasons,
+            input_hashes,
+        })
+    }
+
+    /// Pre-computed input hash for `id`, captured during [`Self::compute`].
+    /// Returns `None` for ids not in the plan (caller error).
+    #[must_use]
+    pub fn input_hash(&self, id: &ActionId) -> Option<Sha256> {
+        self.input_hashes.get(id).copied()
+    }
+}
+
+/// Decide whether `id` is stale, given its freshly-computed input hash,
+/// its last cached build event, and the set of already-stale ids in
+/// earlier positions of the same layer (or earlier layers).
+///
+/// Returns `Some(reason)` when stale, `None` when up-to-date. Pure — no
+/// side effects, no async — extracted from `Plan::compute` so the latter
+/// stays under the workspace's `clippy::too_many_lines` threshold.
+fn classify(
+    id: &ActionId,
+    action: &dyn Action,
+    now: Sha256,
+    last: Option<&BuildEvent>,
+    stale: &HashSet<ActionId>,
+) -> Option<ChangeReason> {
+    let _ = id; // referenced only for trace context in future revisions
+    // Both `None` and a prior `Failed` collapse to `NoCachedBuild`:
+    // we don't carry a "last failure" signal in `ChangeReason`, so a
+    // failed prior build always re-runs.
+    let Some(event) = last else {
+        return Some(ChangeReason::NoCachedBuild);
+    };
+    match event {
+        BuildEvent::Failed { .. } => Some(ChangeReason::NoCachedBuild),
+        BuildEvent::Success { input, .. } if *input != now => {
+            Some(ChangeReason::InputHashChanged {
+                from: *input,
+                to: now,
+            })
+        }
+        BuildEvent::Success { .. } => action
+            .deps()
+            .into_iter()
+            .find(|d| stale.contains(d))
+            .map(|dep| ChangeReason::UpstreamMoved { dep }),
     }
 }

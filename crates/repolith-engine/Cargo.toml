@@ -2,12 +2,20 @@
 name = "repolith-engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-repolith-core = { path = "../repolith-core" }
+repolith-core = { path = "../repolith-core", version = "0.0.1" }
 async-trait = "0.1"
 futures = "0.3"
 num_cpus = "1"
@@ -16,4 +24,4 @@ tokio = { version = "1.0", features = ["macros", "rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
-repolith-cache = { path = "../repolith-cache" }
+repolith-cache = { path = "../repolith-cache", version = "0.0.1" }
