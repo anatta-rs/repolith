@@ -251,3 +251,69 @@ async fn test_cancel_during_compute_returns_cancelled() {
         other => panic!("expected Build(Cancelled), got {other:?}"),
     }
 }
+
+/// Stub action whose `input_hash` sleeps for a configurable duration.
+/// Used to verify cancel interrupts a layer's in-flight fan-out.
+struct SlowAction {
+    id: ActionId,
+    delay: std::time::Duration,
+}
+
+#[async_trait]
+impl Action for SlowAction {
+    fn id(&self) -> ActionId {
+        self.id.clone()
+    }
+    fn deps(&self) -> Vec<ActionId> {
+        Vec::new()
+    }
+    async fn input_hash(&self, _ctx: &Ctx) -> std::result::Result<Sha256, BuildError> {
+        tokio::time::sleep(self.delay).await;
+        Ok(Sha256([0; 32]))
+    }
+    async fn execute(&self, _ctx: &Ctx) -> std::result::Result<BuildOutput, BuildError> {
+        Ok(BuildOutput {
+            output_hash: Sha256([0; 32]),
+            stdout: String::new(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_cancel_during_layer_fanout_short_circuits() {
+    // Layer of 4 slow actions, each sleeping 10s in `input_hash`. Fire
+    // cancel 100ms after compute starts. Without the inner select! against
+    // ctx.cancel the compute would wait the full 10s. With it, the futures
+    // observe the cancel and return Cancelled in ~the cancel delay.
+    let actions: Vec<Box<dyn Action>> = (0..4)
+        .map(|i| {
+            Box::new(SlowAction {
+                id: aid(&format!("slow-{i}")),
+                delay: std::time::Duration::from_secs(10),
+            }) as Box<dyn Action>
+        })
+        .collect();
+    let cache = MockCache::new();
+    let cancel = CancellationToken::new();
+    let ctx = Ctx {
+        cancel: cancel.clone(),
+        workdir: PathBuf::from("/tmp"),
+        env: HashMap::new(),
+    };
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        cancel.cancel();
+    });
+    let start = std::time::Instant::now();
+    let result = Plan::compute(&actions, &cache, &ctx).await;
+    let elapsed = start.elapsed();
+    canceller.await.unwrap();
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "compute should short-circuit on cancel; took {elapsed:?}"
+    );
+    match result {
+        Err(PlanError::Build(BuildError::Cancelled)) => (),
+        other => panic!("expected Build(Cancelled), got {other:?}"),
+    }
+}

@@ -222,3 +222,38 @@ async fn unreachable_url_yields_upstream_unreachable() {
         .expect("ls-remote must complete within 10s");
     assert!(matches!(result, Err(BuildError::UpstreamUnreachable(_))));
 }
+
+#[tokio::test]
+async fn empty_ls_remote_yields_upstream_unreachable() {
+    // A bare repo with no refs (no commits, no HEAD ref) makes
+    // `git ls-remote HEAD` exit 0 with empty stdout. The action must
+    // reject this rather than silently produce a hash over an empty SHA1
+    // (which would re-run as "up to date" forever).
+    // `git init --bare` produces a valid bare repo with HEAD pointing at
+    // refs/heads/main (or master) but no actual commits. `ls-remote HEAD`
+    // on this repo exits 0 with empty stdout — the exact silent-bogus-hash
+    // failure mode we are guarding against.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let bare = tmp.path().join("empty.git");
+    StdCommand::new("git")
+        .args(["init", "--bare", bare.to_str().unwrap()])
+        .output()
+        .expect("git init --bare");
+
+    let action = GitClone {
+        id: ActionId("empty-head".into()),
+        repo_url: format!("file://{}", bare.display()),
+        path: PathBuf::from("/tmp/never-clone-me-3"),
+        deps: vec![],
+    };
+    let result = action.input_hash(&fresh_ctx()).await;
+    match result {
+        Err(BuildError::UpstreamUnreachable(msg)) => {
+            assert!(
+                msg.contains("no HEAD"),
+                "expected 'no HEAD' in error, got: {msg}"
+            );
+        }
+        other => panic!("expected UpstreamUnreachable(no HEAD), got {other:?}"),
+    }
+}
