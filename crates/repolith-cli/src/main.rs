@@ -1,9 +1,7 @@
 //! `repolith` CLI — user-facing entry point for the orchestrator.
 //!
-//! Three subcommands:
+//! Two subcommands:
 //!
-//! - `init` — first-time materialization of every declared node (alias for
-//!   `sync` with default flags).
 //! - `sync` — walk the action DAG and rebuild stale entries.
 //! - `status` — print a cache hit/miss table without executing anything.
 //!
@@ -107,8 +105,15 @@ fn init_tracing(verbosity: u8) {
         1 => "debug",
         _ => "trace",
     };
-    let filter = std::env::var("RUST_LOG")
-        .unwrap_or_else(|_| format!("warn,repolith={level},repolith_engine={level}"));
+    // Filter targets the four internal crates explicitly. `repolith` alone
+    // (no underscore) catches the bin target; the three lib crates each
+    // need their own entry because `tracing-subscriber` matches on the
+    // exact module-path prefix, not on a wildcard.
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        format!(
+            "warn,repolith={level},repolith_engine={level},repolith_cache={level},repolith_actions={level}"
+        )
+    });
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(filter))
         .with_writer(std::io::stderr)
