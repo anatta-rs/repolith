@@ -396,3 +396,106 @@ path = "./a"
 "#;
     Manifest::from_toml(toml).expect("valid SCP-style git URL must parse");
 }
+
+// ---------------------------------------------------------------------------
+// Node-id path-traversal — the default clone-path derivation is `./{id}`,
+// so any path-separator or `..` in `id` lets a hostile manifest reach
+// outside the workspace.
+// ---------------------------------------------------------------------------
+
+fn parse_err_for_id(node_id: &str) -> ManifestError {
+    // Use a TOML literal-string (single quotes) so `\` in `node_id`
+    // doesn't get interpreted as an escape sequence by the TOML parser.
+    let toml = format!(
+        r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = '{node_id}'
+git = "https://example.com/r.git"
+path = "./a"
+
+  [[node.action]]
+  kind = "git-clone"
+"#
+    );
+    Manifest::from_toml(&toml).expect_err("manifest must fail validation")
+}
+
+#[test]
+fn test_reject_node_id_with_slash() {
+    match parse_err_for_id("foo/bar") {
+        ManifestError::InvalidArg { node, reason } => {
+            assert_eq!(node, "foo/bar");
+            assert!(
+                reason.contains("path separator"),
+                "expected path-separator reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_node_id_with_backslash() {
+    match parse_err_for_id(r"foo\bar") {
+        ManifestError::InvalidArg { node, reason } => {
+            assert_eq!(node, r"foo\bar");
+            assert!(
+                reason.contains("path separator"),
+                "expected path-separator reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_node_id_dotdot() {
+    match parse_err_for_id("..") {
+        ManifestError::InvalidArg { node, reason } => {
+            assert_eq!(node, "..");
+            assert!(
+                reason.contains("path-traversal"),
+                "expected path-traversal reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_node_id_dot() {
+    match parse_err_for_id(".") {
+        ManifestError::InvalidArg { node, reason } => {
+            assert_eq!(node, ".");
+            assert!(
+                reason.contains("path-traversal"),
+                "expected path-traversal reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_accept_node_id_with_inner_dotdot() {
+    // `foo..bar` is a legal directory name; only path separators + literal
+    // `.`/`..` are dangerous.
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "foo..bar"
+git = "https://example.com/r.git"
+path = "./a"
+
+  [[node.action]]
+  kind = "git-clone"
+"#;
+    Manifest::from_toml(toml).expect("inner-dotdot node id must parse");
+}
