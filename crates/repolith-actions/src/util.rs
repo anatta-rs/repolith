@@ -60,26 +60,38 @@ pub(crate) async fn run_with_cancel(
         () = cancel.cancelled() => {
             #[cfg(unix)]
             if let Some(pgid) = pgid {
-                kill_group(pgid);
+                // Awaited (not detached) so the SIGKILL escalation is bound
+                // to this function's lifetime — even a Ctrl-C that triggers
+                // a fast tokio runtime shutdown can't strand grandchildren.
+                kill_group(pgid).await;
             }
             Err(BuildError::Cancelled)
         }
     }
 }
 
-/// SIGTERM the process group, wait [`SIGTERM_GRACE`], then SIGKILL if any
-/// member is still alive. Errors are swallowed: the only failure mode is
-/// "child already exited", which is the desired end state anyway.
+/// SIGTERM the process group, wait [`SIGTERM_GRACE`], then escalate to
+/// SIGKILL — but only if the group leader is still alive. The liveness
+/// check guards against PID recycling: if the leader was already reaped
+/// during the grace window, the kernel can recycle that pgid for an
+/// unrelated process, and an unconditional `killpg(pgid, SIGKILL)` would
+/// signal strangers. Errors from `killpg` are swallowed (the only
+/// expected failure is "no such group", which is the desired end state).
 #[cfg(unix)]
-fn kill_group(pgid: i32) {
-    use nix::sys::signal::{Signal, killpg};
+async fn kill_group(pgid: i32) {
+    use nix::errno::Errno;
+    use nix::sys::signal::{Signal, kill, killpg};
     use nix::unistd::Pid;
     let pg = Pid::from_raw(pgid);
     let _ = killpg(pg, Signal::SIGTERM);
-    tokio::spawn(async move {
-        tokio::time::sleep(SIGTERM_GRACE).await;
+    tokio::time::sleep(SIGTERM_GRACE).await;
+    // `kill(pid, 0)` with pid == leader's pid checks whether the leader is
+    // still alive. ESRCH means it's gone; anything else (alive, or EPERM
+    // because we lost permission across exec) is treated as "still up, go
+    // ahead and SIGKILL".
+    if !matches!(kill(pg, None), Err(Errno::ESRCH)) {
         let _ = killpg(pg, Signal::SIGKILL);
-    });
+    }
 }
 
 /// Map a non-zero exit status into [`BuildError::CommandFailed`].
@@ -170,6 +182,38 @@ mod tests {
         assert!(
             matches!(probe, Err(Errno::ESRCH)),
             "grandchild pid {grandchild_pid} still alive after cancel + grace: {probe:?}"
+        );
+    }
+
+    /// `kill_group` against an already-dead pgid (the leader exited and was
+    /// reaped) must NOT issue a second `killpg(SIGKILL)`. We can't easily
+    /// observe the (lack of) signal directly, but we can assert that the
+    /// function returns within the grace window without panic and without
+    /// observable side effects on an unrelated process.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_group_skips_kill_after_leader_reaped() {
+        // Spawn a short-lived shell that exits before we call kill_group.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "exit 0"]);
+        cmd.process_group(0);
+        let child = cmd.spawn().expect("spawn");
+        let pgid = i32::try_from(child.id().expect("pid")).expect("pid fits");
+        // Wait for the child to exit and be reaped.
+        let _ = child.wait_with_output().await;
+        // Give the OS a beat to recycle the pid space.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // kill_group on a dead pgid: SIGTERM will return ESRCH (harmless),
+        // sleep through the grace, liveness check → ESRCH → no SIGKILL.
+        // No panic, function returns.
+        let start = std::time::Instant::now();
+        kill_group(pgid).await;
+        let elapsed = start.elapsed();
+        // Must wait the full grace (so SIGTERM had a chance to land for
+        // real groups), but must not loop or hang.
+        assert!(
+            elapsed >= SIGTERM_GRACE && elapsed < SIGTERM_GRACE * 3,
+            "kill_group took {elapsed:?}, expected ~{SIGTERM_GRACE:?}"
         );
     }
 }

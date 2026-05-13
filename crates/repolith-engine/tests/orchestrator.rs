@@ -382,6 +382,7 @@ fn builder_requires_cache() {
     assert!(matches!(result, Err(BuilderError::MissingCache)));
 }
 
+
 #[tokio::test]
 async fn cancel_between_layers_aborts_pipeline() {
     // Layer 1: A succeeds. We pre-cancel the root token before invoking
