@@ -152,9 +152,15 @@ impl Action for CargoInstall {
         // Use `install_root` (the tilde-expanded path) to match where cargo
         // actually wrote the binary; reading from `self.install_to` would
         // otherwise look up a literal `~` directory and always fail.
-        let bin = install_root.join("bin").join(&crate_name);
-        let bytes = std::fs::read(&bin)
-            .map_err(|e| BuildError::Io(format!("read installed binary {}: {e}", bin.display())))?;
+        //
+        // Windows binaries have `.exe` suffix; `EXE_SUFFIX` is `""` on Unix.
+        // `tokio::fs::read` releases the async worker for the (potentially
+        // multi-MB) read instead of blocking it like `std::fs::read` did.
+        let bin_name = format!("{crate_name}{}", std::env::consts::EXE_SUFFIX);
+        let bin = install_root.join("bin").join(&bin_name);
+        let bytes = tokio::fs::read(&bin).await.map_err(|e| {
+            BuildError::Io(format!("read installed binary {}: {e}", bin.display()))
+        })?;
         let mut h = ShaHasher::new();
         h.update(&bytes);
         Ok(BuildOutput {

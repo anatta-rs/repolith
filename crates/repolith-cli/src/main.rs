@@ -156,6 +156,15 @@ const ENV_ALLOWLIST: &[&str] = &[
     "TZ",
     "LANG",
     "LC_ALL",
+    // Private-repo / SSH support — without these, `git clone` over ssh
+    // can't reach the running ssh-agent and falls back to interactive
+    // prompts which fail under piped stdio.
+    "SSH_AUTH_SOCK",
+    "GIT_SSH_COMMAND",
+    // `~/.config` overrides — `git` reads `$XDG_CONFIG_HOME/git/config`
+    // when set; without the passthrough, custom git config is silently
+    // ignored.
+    "XDG_CONFIG_HOME",
 ];
 
 fn filtered_env() -> std::collections::HashMap<String, String> {

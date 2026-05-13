@@ -152,6 +152,34 @@ fn check_no_leading_dash(value: &str, node: &str, field: &str) -> Result<(), Man
     Ok(())
 }
 
+/// Reject node ids that would let the manifest escape the workspace when
+/// used to construct a default clone path (`./{id}`): empty ids, ids
+/// containing path separators (`/`, `\`), and the literal `.` / `..`
+/// path-traversal tokens.
+fn check_node_id_safe(id: &str) -> Result<(), ManifestError> {
+    if id.is_empty() {
+        return Err(ManifestError::InvalidArg {
+            node: id.to_string(),
+            reason: "node id is empty".to_string(),
+        });
+    }
+    if let Some(c) = id.chars().find(|c| matches!(c, '/' | '\\')) {
+        return Err(ManifestError::InvalidArg {
+            node: id.to_string(),
+            reason: format!(
+                "node id `{id}` contains path separator `{c}` — would create nested or escaping directories"
+            ),
+        });
+    }
+    if id == "." || id == ".." {
+        return Err(ManifestError::InvalidArg {
+            node: id.to_string(),
+            reason: format!("node id `{id}` is a path-traversal token"),
+        });
+    }
+    Ok(())
+}
+
 /// Validate `url` against [`ALLOWED_URL_SCHEMES`], the no-leading-dash rule
 /// (including for host and path components — so `ssh://-oProxyCommand=evil@h/r`
 /// is rejected), and the no-control-characters rule. Empty URLs are rejected
@@ -284,6 +312,7 @@ impl Manifest {
         // that ultimately reaches a subprocess.
         let mut seen = std::collections::HashSet::new();
         for n in &self.nodes {
+            check_node_id_safe(&n.id)?;
             if !seen.insert(&n.id) {
                 return Err(ManifestError::DuplicateNodeId(n.id.clone()));
             }
