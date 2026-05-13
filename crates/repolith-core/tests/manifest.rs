@@ -79,7 +79,10 @@ fn test_example_fixture_parses() {
     // The committed `repolith.toml.example` at the repo root must always
     // parse + validate — protects the README's quick-start from rotting.
     let m = Manifest::from_toml(EXAMPLE).expect("repolith.toml.example must parse");
-    assert_eq!(m.orchestrator.name, "anatta-rs");
+    assert!(
+        !m.orchestrator.name.is_empty(),
+        "example manifest must set an orchestrator name"
+    );
     assert!(
         !m.nodes.is_empty(),
         "example must showcase at least one node"

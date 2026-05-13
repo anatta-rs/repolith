@@ -1,11 +1,9 @@
 //! `CargoInstall` action — wraps `cargo install --git|--path --locked --force --root <dir>`.
 //!
-//! Mirrors the install pattern used by every `anatta-rs/*` tool. Like
+//! The standard install pattern for any Rust binary crate. Like
 //! [`crate::git_clone::GitClone`], the spawned `cargo` subprocess is raced
-//! against [`Ctx::cancel`] via `tokio::select!` so the orchestrator's
+//! against `ctx.cancel` via `tokio::select!` so the orchestrator's
 //! `FailFast` mode can short-circuit a long-running build.
-//!
-//! [`Ctx::cancel`]: repolith_core::types::Ctx::cancel
 
 use crate::util::{check_status, run_with_cancel};
 use async_trait::async_trait;

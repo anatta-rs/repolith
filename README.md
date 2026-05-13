@@ -1,10 +1,13 @@
 # repolith
 
-> Multi-repo orchestration for Rust ecosystems. Lightweight. Graph-aware.
+> Declarative orchestrator for Rust toolchains spread across multiple
+> sibling git repositories. Lightweight. Cache-aware. Cancellation-aware.
 
-This crate name is **reserved on crates.io**. The real implementation is
-incubating in [`anatta-rs/anatta`](https://github.com/anatta-rs/anatta)
-and will land here once the API stabilizes (target: 0.1.0).
+`repolith` reads a single `repolith.toml` describing a graph of remote
+repositories and the actions to run against each of them — `git clone`,
+`cargo install`, more in M2 — then executes the resulting plan in
+parallel layers, with content-addressed caching so untouched work
+never re-runs.
 
 ## Quick start
 
@@ -18,7 +21,7 @@ cp target/release/repolith ~/.local/bin/   # or any dir on $PATH
 
 # 3. Copy the example into the directory where you want sibling
 #    clones + tool binaries to land, then edit it for your stack
-mkdir -p ../my-org && cd ../my-org
+mkdir -p ../my-stack && cd ../my-stack
 cp ../repolith/repolith.toml.example ./repolith.toml
 $EDITOR repolith.toml
 
@@ -29,178 +32,78 @@ repolith sync --dry-run --explain
 repolith sync
 ```
 
-`repolith status` prints a cache hit/miss table you can read at any
-time without running anything. `repolith sync -k` keeps a layer running
-after a failure (useful for surfacing every failure of a layer in one
-pass).
+`repolith status` prints a cache hit/miss table without running
+anything. `repolith sync -k` keeps a layer running after a failure
+(useful for surfacing every failure of a layer in one pass).
 
-See [`repolith.toml.example`](repolith.toml.example) for a full manifest
-mirroring the `anatta-rs/*` stack.
+See [`repolith.toml.example`](repolith.toml.example) for a full
+manifest with three nodes and one attached project.
 
-## What repolith will be
+## What repolith does
 
-A declarative, content-addressed orchestrator for Rust projects spread
-across multiple sibling git repositories. Three core concepts:
+- **Reads a single declarative manifest** (`repolith.toml`) and turns
+  it into a typed `Action` DAG.
+- **Plans before executing.** `compute_plan` walks the graph
+  topologically (Kahn) and decides which actions are stale by
+  comparing each action's input hash against the last persisted
+  result.
+- **Executes layers in parallel** via `tokio::FuturesUnordered` +
+  `Semaphore`, capped by `--jobs N` (default = `num_cpus`).
+- **Cancels in-flight subprocesses on first failure** in `--fail-fast`
+  mode (default), via a shared `CancellationToken` plumbed through
+  every action's `Ctx`. `--keep-going` lets the current layer settle.
+- **Persists every event** to a SQLite cache so the next `sync` is a
+  near-no-op when nothing changed upstream.
 
-- **node** — a managed git repo (services, CLIs, libraries)
-- **action** — one step of work (cargo install, docker compose, deploy
-  templates, project artifacts into a graph, ...)
-- **attached** — a consumer repo that pulls templates from the
-  orchestrator (e.g. shared `.claude/` or `.githooks/` files)
-
-Pluggable cache backends (sqlite default, Neo4j optional for projects
-that want a queryable causal trace of every build).
-
-## What repolith will NOT be
+## What repolith does NOT do
 
 The negative scope is **fixed** and will not evolve:
 
-- Not a CI runner — no distributed execution, no remote workers
-- Not a toolchain manager — `rustup` is fine
-- Not a package manager — `cargo` is fine
-- Not a process supervisor — `systemd` / `launchd` / `docker compose`
-  are fine; repolith reads heartbeats, doesn't write them
+- Not a CI runner — no distributed execution, no remote workers.
+- Not a toolchain manager — `rustup` is fine.
+- Not a package manager — `cargo` is fine.
+- Not a process supervisor — `systemd` / `launchd` /
+  `docker compose` are fine; repolith reads heartbeats, doesn't
+  write them.
 - Not a monorepo tool — `cargo workspaces` already covers single-repo
-  workspace publishing
-- Not a hermetic build system — hermeticity is opt-in per action, not
-  the default
+  workspace publishing.
+- Not a hermetic build system — hermeticity is opt-in per action,
+  not the default.
 
-## Architecture (target — v0.1)
+## Architecture
 
-GDD-validated layout for milestone [v0.0.1 — bootstrap M1](https://github.com/anatta-rs/repolith/milestone/1).
-4 crates, 3 traits, layered execution with `FuturesUnordered` + `CancellationToken`.
-🟢 = additions vs the empty placeholder (everything is net-new in M1).
-
-```mermaid
-graph TD
-    subgraph CORE["crates/repolith-core (lib)"]
-        T_ACT["trait Action<br/>execute → Result&lt;BuildOutput, BuildError&gt;<br/>+ CancellationToken in Ctx"]:::add
-        T_CACHE[trait Cache]:::add
-        T_SRC[trait Source]:::add
-        E_BUILD["<b>BuildError</b><br/>· UpstreamUnreachable<br/>· CommandFailed exit_code, stderr<br/>· IoError<br/>· Cancelled"]:::add
-        E_PLAN["<b>PlanError</b><br/>· Cycle path<br/>· MissingDep id"]:::add
-        EM["<b>ExecMode</b><br/>FailFast (cancel layer)<br/>KeepGoing (settle then halt)"]:::add
-        P_PLAN[Plan layers + reasons<br/>frozen DAG]:::add
-        T_ORCH[Orchestrator<br/>builder cache manifest registry<br/>max_parallelism, mode]:::add
-        T_TYPES[ActionId, Sha256, BuildEvent, Ctx]:::add
-        T_MAN[Manifest types<br/>+ AttachedEntry+Direction]:::add
-    end
-
-    subgraph CACHE["crates/repolith-cache-sqlite"]
-        SQL[SqliteCache::open path]:::add
-    end
-    subgraph ACT["crates/repolith-actions (feature-gated)"]
-        F_GIT[GitClone]:::add
-        F_CARGO[CargoInstall]:::add
-    end
-    subgraph CLI["crates/repolith-cli (bin)"]
-        BIN[main.rs · clap]:::add
-        FLAGS["sync flags:<br/>--explain · --dry-run<br/>-j N · -k/--keep-going"]:::add
-    end
-    TESTS["tests/<br/>manifest_parse + sync_smoke<br/>+ plan_layers + parallel_exec<br/>+ failfast_cancels + keepgoing_settles"]:::add
-
-    SQL -.impl.-> T_CACHE
-    F_GIT -.impl.-> T_ACT
-    F_CARGO -.impl.-> T_ACT
-    BIN --> T_ORCH
-    T_ORCH --> P_PLAN
-    T_ORCH --> EM
-    T_ACT --> E_BUILD
-
-    classDef add fill:#90EE90,stroke:#228B22,color:#000
-```
-
-### Sequence — `ExecMode::FailFast` (mid-layer cancel)
-
-Cancellation via `FuturesUnordered` + shared `CancellationToken` —
-NOT `tokio::join_all` (see [#6](https://github.com/anatta-rs/repolith/issues/6)
-implementation note).
-
-```mermaid
-sequenceDiagram
-    participant CLI
-    participant Orch as Orchestrator
-    participant Tok as CancellationToken
-    participant L1a as Action A1<br/>(slow)
-    participant L1b as Action B1<br/>(fast, fails)
-    participant L1c as Action C1<br/>(slow)
-    participant L2 as Layer 2
-
-    CLI->>Orch: execute_plan(plan, FailFast)
-    Note over Orch: spawn layer 1 concurrent
-    par
-        Orch-)L1a: execute(ctx, token)
-    and
-        Orch-)L1b: execute(ctx, token)
-    and
-        Orch-)L1c: execute(ctx, token)
-    end
-    L1b-->>Orch: Err(CommandFailed)
-    Orch->>Tok: cancel
-    Tok-->>L1a: cancel signal
-    Tok-->>L1c: cancel signal
-    L1a-->>Orch: Err(Cancelled)
-    L1c-->>Orch: Err(Cancelled)
-    Note over Orch,L2: layer 2 NEVER STARTS
-    Orch-->>CLI: Err(LayerFailed { events: [..] })
-```
-
-### Sequence — `ExecMode::KeepGoing` (settle then halt)
-
-Each layer runs to completion regardless of failures ; the orchestrator
-halts at the layer boundary if anything failed in the current layer.
-Useful for surfacing all failures of a layer in one run.
-
-```mermaid
-sequenceDiagram
-    participant CLI
-    participant Orch as Orchestrator
-    participant L1a as Action A1
-    participant L1b as Action B1<br/>(fails)
-    participant L1c as Action C1
-    participant L2 as Layer 2
-
-    CLI->>Orch: execute_plan(plan, KeepGoing)
-    par
-        Orch-)L1a: execute()
-    and
-        Orch-)L1b: execute()
-    and
-        Orch-)L1c: execute()
-    end
-    L1b-->>Orch: Err(CommandFailed)
-    L1a-->>Orch: Ok(BuildOutput)
-    L1c-->>Orch: Ok(BuildOutput)
-    Note over Orch: layer settles<br/>1 failure, 2 ok
-    Note over Orch,L2: any err → halt before next layer
-    Orch-->>CLI: Err(LayerFailed { events: [Ok, Err, Ok] })
-```
+5 crates, 3 traits, layered execution with `FuturesUnordered` +
+`CancellationToken` + `Semaphore`. Full diagram + the two
+`FailFast` / `KeepGoing` sequence diagrams + design decisions live
+in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Status
 
 **M1 — bootstrap (v0.0.1) shipped.** 5 crates, 2 builtin actions,
-parallel layered execution with cancellation, SQLite-backed cache.
+parallel layered execution with cancellation, SQLite cache, 55
+workspace tests, CI on every PR.
 
-- `repolith-core` — types, traits (`Action`, `Source`, `Cache`),
-  manifest parser, layered `Plan`.
-- `repolith-cache` — `SqliteCache` (rusqlite, bundled).
-- `repolith-engine` — async `Orchestrator` (`FuturesUnordered` +
-  `CancellationToken` + `Semaphore`), `FailFast` / `KeepGoing` modes.
-- `repolith-actions` — `GitClone` (feature `git`), `CargoInstall`
-  (feature `cargo`).
-- `repolith-cli` — `repolith init|sync|status` with `-j N`,
-  `-k/--keep-going`, `--explain`, `--dry-run`.
+| Crate | Purpose |
+|---|---|
+| `repolith-core` | Types, traits (`Action`, `Source`, `Cache`), manifest parser, layered `Plan`. |
+| `repolith-cache` | `SqliteCache` (rusqlite, bundled). |
+| `repolith-engine` | Async `Orchestrator` with `FuturesUnordered` + `CancellationToken` + `Semaphore`. |
+| `repolith-actions` | `GitClone` (feature `git`), `CargoInstall` (feature `cargo`). |
+| `repolith-cli` | `repolith init / sync / status` — the binary you run. |
 
-55 workspace tests green ; CI runs `fmt + clippy -D warnings + test +
-doc -D warnings` on every PR. See [`CHANGELOG.md`](CHANGELOG.md) for
-the per-issue breakdown.
+See [`CHANGELOG.md`](CHANGELOG.md) for the per-issue breakdown.
 
 ### Roadmap
 
 - **M2** — federation `kind = "repolith"` (orchestrator-of-orchestrators),
   Neo4j cache backend, `docker` action.
-- **M3** — watch mode (re-plan on file change),
-  `template_apply` action driving `AttachedEntry::Outbound`.
+- **M3** — watch mode (re-plan on file change), `template_apply`
+  action driving `AttachedEntry::Outbound`.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev setup, test
+workflow, and recipes for adding a new action or a new cache backend.
 
 ## License
 
