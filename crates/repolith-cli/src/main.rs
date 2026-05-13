@@ -51,9 +51,6 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// First-time setup: clone every declared node into its `path`.
-    Init,
-
     /// Walk the action DAG and execute stale actions.
     Sync(SyncArgs),
 
@@ -99,20 +96,8 @@ async fn main() -> Result<()> {
     });
 
     match &cli.cmd {
-        Cmd::Init => run_sync(&cli, &SyncArgs::defaults(), cancel).await,
         Cmd::Sync(args) => run_sync(&cli, args, cancel).await,
         Cmd::Status => run_status(&cli, cancel).await,
-    }
-}
-
-impl SyncArgs {
-    fn defaults() -> Self {
-        Self {
-            jobs: num_cpus::get(),
-            keep_going: false,
-            explain: false,
-            dry_run: false,
-        }
     }
 }
 

@@ -11,7 +11,6 @@
 //! - [`types`] — value types: `ActionId`, `Sha256`, `BuildEvent`, `Ctx`
 //!   (carries the `CancellationToken`), `BuildError`, `ExecMode`.
 //! - [`action`] — `trait Action`: `id`, `deps`, `input_hash`, `execute`.
-//! - [`source`] — `trait Source`: upstream revision lookup.
 //! - [`cache`] — `trait Cache` + `CacheError`. Implementations live in
 //!   `repolith-cache`.
 //! - [`plan`] — `Plan::compute` (Kahn topological sort + cascading
@@ -39,9 +38,6 @@ pub mod types;
 
 /// `Action` trait — one unit of orchestrated work.
 pub mod action;
-
-/// `Source` trait — abstraction over an upstream revision (e.g. git HEAD).
-pub mod source;
 
 /// `Cache` trait + `CacheError`. Concrete backends live in dependent crates.
 pub mod cache;

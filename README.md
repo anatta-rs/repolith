@@ -37,7 +37,7 @@ anything. `repolith sync -k` keeps a layer running after a failure
 (useful for surfacing every failure of a layer in one pass).
 
 See [`repolith.toml.example`](repolith.toml.example) for a full
-manifest with three nodes and one attached project.
+manifest with four nodes.
 
 ## What repolith does
 
@@ -85,7 +85,7 @@ workspace tests, CI on every PR.
 
 | Crate | Purpose |
 |---|---|
-| `repolith-core` | Types, traits (`Action`, `Source`, `Cache`), manifest parser, layered `Plan`. |
+| `repolith-core` | Types, traits (`Action`, `Cache`), manifest parser, layered `Plan`. |
 | `repolith-cache` | `SqliteCache` (rusqlite, bundled). |
 | `repolith-engine` | Async `Orchestrator` with `FuturesUnordered` + `CancellationToken` + `Semaphore`. |
 | `repolith-actions` | `GitClone` (feature `git`), `CargoInstall` (feature `cargo`). |

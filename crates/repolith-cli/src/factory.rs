@@ -13,7 +13,7 @@ use repolith_actions::cargo_install::{CargoInstall, CargoSource};
 use repolith_actions::git_clone::GitClone;
 use repolith_actions::paths::expand_tilde;
 use repolith_core::action::Action;
-use repolith_core::manifest::{ActionEntry, Manifest};
+use repolith_core::manifest::{ActionEntry, Manifest, action_kind};
 use repolith_core::types::ActionId;
 use std::path::PathBuf;
 
@@ -37,10 +37,9 @@ pub fn build_actions_from_manifest(manifest: &Manifest) -> Result<Vec<Box<dyn Ac
         let mut prev_id: Option<ActionId> = None;
 
         for (idx, entry) in node.actions.iter().enumerate() {
-            let kind = match entry {
-                ActionEntry::GitClone => "git-clone",
-                ActionEntry::CargoInstall { .. } => "cargo-install",
-            };
+            // Reuse the manifest's action_kind() so adding a new variant
+            // only requires touching one match arm (in manifest.rs).
+            let kind = action_kind(entry);
             let id = ActionId(format!("{}::{}::{}", node.id, kind, idx));
             let deps = prev_id.iter().cloned().collect::<Vec<_>>();
 

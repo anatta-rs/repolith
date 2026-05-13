@@ -36,7 +36,6 @@ fn help_lists_all_subcommands() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(str::contains("init"))
         .stdout(str::contains("sync"))
         .stdout(str::contains("status"));
 }

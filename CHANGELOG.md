@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed (BREAKING)
+
+These public types were unused or premature in M1 and are gone in 0.0.2.
+Pre-1.0 cleanup; restored when the M2 features that need them land.
+
+- `repolith_core::source` module + `Source` trait (no implementor in M1).
+- `repolith_core::manifest::AttachedEntry` and `Direction` enum
+  (`Manifest.attached` field too). `[[attached]]` blocks in
+  `repolith.toml` are still parsed for forward compatibility but
+  ignored. The schema returns with the M2 `template_apply` action.
+- CLI `repolith init` subcommand. It was a thin alias for `sync` with
+  default flags; users should call `repolith sync` directly.
+
+### Changed
+
+- `BuildError` Display strings now use the lowercase-prefix convention
+  shared with `CacheError` and `PlanError` (`command failed (exit N): …`,
+  `io: …`, `build cancelled`, `upstream unreachable: …`). Any tool that
+  greps logs for the old `Command failed:` / `IO error:` / `Build cancelled`
+  strings will need to update its patterns.
+- `repolith_core::manifest::action_kind` is now `pub` so the CLI's
+  manifest factory can reuse it instead of duplicating the
+  `git-clone`/`cargo-install` mapping. No semantic change.
+
+### Added
+
+- SIGTERM handler in addition to SIGINT (CLI now traps both signals
+  and propagates a single cancel through the orchestrator).
+- `Cache::record_batch` trait method (default impl loops `record`;
+  `SqliteCache` overrides with a transaction so per-layer event
+  writes are atomic).
+- Argument-injection validation at manifest parse time
+  (`ManifestError::InvalidUrl` and `InvalidArg`).
+- `SECURITY.md` with the M1 threat model and known limitations.
+
+### Fixed
+
+- `cargo_install` was reading the installed binary at the unexpanded
+  `install_to` path while cargo wrote at the expanded path; every
+  `~/...` install now succeeds.
+- `SqliteCache` now opens with `journal_mode = WAL`,
+  `synchronous = NORMAL`, and `busy_timeout = 5s` so concurrent
+  `repolith sync` invocations don't deadlock with `database is locked`.
+- Subprocesses spawned by actions are now killed when the wrapping
+  future is dropped (via `Command::kill_on_drop(true)`); previously
+  Ctrl-C left orphan `git`/`cargo` processes.
+- Workspace-package metadata (license, description, repository, etc.)
+  is now properly inherited by every member crate so `cargo publish`
+  works.
+- `Plan::compute` now runs per-layer `input_hash` and `cache.last_build`
+  probes concurrently; was sequential, scaled poorly with N nodes.
+- `Plan::compute` and `Orchestrator::execute_plan` now poll
+  `ctx.cancel` between layers so a Ctrl-C during long network probes
+  short-circuits cleanly.
+- `Ctx.env` now carries an allowlisted subset of the parent process
+  env instead of the full snapshot, so secrets like `GITHUB_TOKEN` and
+  `AWS_SECRET_ACCESS_KEY` can no longer leak through a future
+  `tracing::debug!(?ctx)` or panic dump.
+- Tilde expansion (`~/...`) is now applied to `node.path` in addition
+  to `install_to`, so manifests using `~`-prefixed sibling clone paths
+  no longer create literal `~` directories.
+
 ## [0.0.1] - 2026-05-13
 
 ### Added — M1 bootstrap
@@ -16,7 +80,7 @@ against regressions.
 #### Crates
 - **`repolith-core`** ([#1], [#2], [#3], [#4], [#5]) — types
   (`ActionId`, `Sha256`, `BuildEvent`, `Ctx`, `BuildError`, `ExecMode`),
-  traits (`Action`, `Source`, `Cache`), manifest parser with `~0.1`
+  traits (`Action`, `Cache`), manifest parser with `~0.1`
   schema validation + duplicate-id + missing-source checks, layered
   `Plan` (Kahn topological sort) with cascading `ChangeReason`
   (`NoCachedBuild` / `InputHashChanged` / `UpstreamMoved`).

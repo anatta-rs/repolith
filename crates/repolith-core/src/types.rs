@@ -45,13 +45,17 @@ pub enum ExecMode {
 }
 
 /// Errors that can occur during the execution of an action.
+///
+/// Display strings use the lowercase-prefix convention shared with
+/// `CacheError` and `PlanError` so logs and CLI rendering stay
+/// uniform.
 #[derive(thiserror::Error, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum BuildError {
     /// A required upstream dependency failed or could not be built.
     #[error("upstream unreachable: {0}")]
     UpstreamUnreachable(String),
     /// The command executed by the action returned a non-zero exit code.
-    #[error("Command failed: {exit_code}: {stderr}")]
+    #[error("command failed (exit {exit_code}): {stderr}")]
     CommandFailed {
         /// The exit code returned by the command.
         exit_code: i32,
@@ -59,10 +63,10 @@ pub enum BuildError {
         stderr: String,
     },
     /// An I/O error occurred (e.g., file not found, permission denied).
-    #[error("IO error: {0}")]
+    #[error("io: {0}")]
     Io(String),
     /// The build was cancelled by the user or the system.
-    #[error("Build cancelled")]
+    #[error("build cancelled")]
     Cancelled,
 }
 
@@ -129,13 +133,13 @@ mod tests {
             exit_code: 1,
             stderr: "boom".to_string(),
         };
-        assert_eq!(err2.to_string(), "Command failed: 1: boom");
+        assert_eq!(err2.to_string(), "command failed (exit 1): boom");
 
         let err3 = BuildError::Io("file not found".to_string());
-        assert_eq!(err3.to_string(), "IO error: file not found");
+        assert_eq!(err3.to_string(), "io: file not found");
 
         let err4 = BuildError::Cancelled;
-        assert_eq!(err4.to_string(), "Build cancelled");
+        assert_eq!(err4.to_string(), "build cancelled");
     }
 
     #[test]

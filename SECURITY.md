@@ -71,8 +71,8 @@ These are real risks under a hostile-manifest threat model, *not*
 exploitable by a benign typo. They're called out so operators can make
 informed deployment decisions.
 
-- **Path traversal (CWE-22)** — `node.path`, `[[node.action]].install_to`,
-  and `[[attached]].path` accept any absolute or relative path. A
+- **Path traversal (CWE-22)** — `node.path` and
+  `[[node.action]].install_to` accept any absolute or relative path. A
   hostile manifest can therefore set `install_to = "/usr/local"` and
   cause `cargo install --root /usr/local` to overwrite system binaries
   on next sync (assuming the operator has write access there). The
