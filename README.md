@@ -79,9 +79,9 @@ in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Status
 
-**M1 — bootstrap (v0.0.1) shipped.** 5 crates, 2 builtin actions,
-parallel layered execution with cancellation, SQLite cache, ~60
-workspace tests.
+**v0.0.2 shipped.** 5 crates, 2 builtin actions, parallel layered
+execution with cancellation, SQLite cache (WAL), URL-injection
+hardening, process-group cancel propagation, 75 workspace tests.
 
 > **CI status.** GitHub Actions runs are temporarily paused while the
 > upstream Actions billing is being sorted out — the workflow in
@@ -96,7 +96,7 @@ workspace tests.
 | `repolith-cache` | `SqliteCache` (rusqlite, bundled). |
 | `repolith-engine` | Async `Orchestrator` with `FuturesUnordered` + `CancellationToken` + `Semaphore`. |
 | `repolith-actions` | `GitClone` (feature `git`), `CargoInstall` (feature `cargo`). |
-| `repolith-cli` | `repolith init / sync / status` — the binary you run. |
+| `repolith-cli` | `repolith sync / status` — the binary you run. |
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the per-issue breakdown.
 
