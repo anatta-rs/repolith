@@ -120,6 +120,16 @@ impl Orchestrator {
         let mut all_events: Vec<BuildEvent> = Vec::new();
 
         for layer in plan.layers() {
+            // Honor cancel between layers — without this, a cancel
+            // fired after layer N completes still triggers layer N+1's
+            // child token to be created from the already-cancelled
+            // parent, which makes every action in N+1 instantly fail
+            // with `Cancelled` and pollutes the cache with bogus
+            // `BuildEvent::Failed` entries.
+            if self.base_ctx.cancel.is_cancelled() {
+                return Err(ExecError::LayerFailed { events: all_events });
+            }
+
             let stale: Vec<ActionId> = layer
                 .iter()
                 .filter(|id| plan.reasons().contains_key(*id))
@@ -131,10 +141,10 @@ impl Orchestrator {
 
             let layer_events = self.execute_layer(&stale, plan, mode, &sem).await;
 
-            // Persist whatever this layer produced before deciding to halt.
-            for ev in &layer_events {
-                self.cache.record(ev.clone()).await?;
-            }
+            // Persist the whole layer's events atomically — a crash mid-batch
+            // shouldn't leave half the layer marked Success and the other
+            // half un-persisted (and thus replayed on the next sync).
+            self.cache.record_batch(layer_events.clone()).await?;
             all_events.extend(layer_events.iter().cloned());
 
             if layer_events

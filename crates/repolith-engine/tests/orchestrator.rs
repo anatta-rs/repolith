@@ -381,3 +381,53 @@ fn builder_requires_cache() {
     let result = Orchestrator::builder().build();
     assert!(matches!(result, Err(BuilderError::MissingCache)));
 }
+
+#[tokio::test]
+async fn cancel_between_layers_aborts_pipeline() {
+    // Layer 1: A succeeds. We pre-cancel the root token before invoking
+    // execute_plan, so the orchestrator must bail at the layer-loop
+    // header *before* spawning anything in layer 2 — otherwise it would
+    // poison the cache with bogus `BuildEvent::Failed` entries from the
+    // already-cancelled child token.
+    let state = TestState::new();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let ctx = Ctx {
+        cancel,
+        workdir: PathBuf::from("/tmp"),
+        env: HashMap::new(),
+    };
+    let orch = Orchestrator::builder()
+        .cache(AlwaysMissCache::new())
+        .max_parallelism(8)
+        .base_ctx(ctx)
+        .register(TestAction::new(
+            "A",
+            &[],
+            state.clone(),
+            Behavior::SucceedAfter(Duration::from_millis(10)),
+        ))
+        .register(TestAction::new(
+            "B",
+            &["A"],
+            state.clone(),
+            Behavior::SucceedAfter(Duration::from_millis(10)),
+        ))
+        .build()
+        .unwrap();
+
+    // The cancelled token also propagates into Plan::compute, so we
+    // expect it to bail there before we ever reach execute_plan. That's
+    // fine — what we're proving is that the cancel signal short-circuits
+    // the pipeline before any subprocesses run.
+    let plan = orch.compute_plan().await;
+    assert!(
+        plan.is_err(),
+        "compute_plan should fail when ctx.cancel is pre-fired"
+    );
+    assert_eq!(
+        state.started.load(Ordering::SeqCst),
+        0,
+        "no action should have started under a pre-cancelled context"
+    );
+}

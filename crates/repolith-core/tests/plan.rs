@@ -227,3 +227,27 @@ async fn test_empty_actions() {
     assert!(plan.reasons().is_empty());
     assert_eq!(plan.stale().count(), 0);
 }
+
+#[tokio::test]
+async fn test_cancel_during_compute_returns_cancelled() {
+    // Two-layer plan; pre-cancel the token so `Plan::compute` should
+    // bail at the top of the second layer iteration with
+    // `PlanError::Build(BuildError::Cancelled)`.
+    let actions = boxed(vec![
+        StubAction::new("A", &[], 0),
+        StubAction::new("B", &["A"], 0),
+    ]);
+    let cache = MockCache::new();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let ctx = Ctx {
+        cancel,
+        workdir: PathBuf::from("/tmp"),
+        env: HashMap::new(),
+    };
+    let err = Plan::compute(&actions, &cache, &ctx).await.unwrap_err();
+    match err {
+        PlanError::Build(BuildError::Cancelled) => (),
+        other => panic!("expected Build(Cancelled), got {other:?}"),
+    }
+}

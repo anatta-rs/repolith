@@ -171,6 +171,13 @@ impl Plan {
         let mut input_hashes: HashMap<ActionId, Sha256> = HashMap::new();
 
         for layer in &layers {
+            // Honor cancel between layers — the parallel probes inside
+            // a layer (network, subprocess) can take seconds, so polling
+            // here means a Ctrl-C during plan computation aborts before
+            // the next layer fires its `git ls-remote` storm.
+            if ctx.cancel.is_cancelled() {
+                return Err(PlanError::Build(BuildError::Cancelled));
+            }
             // Spawn all per-action probes concurrently. Pre-materialize
             // (id, action) and (id, ()) tuples so each future owns its own
             // pieces — the alternative (capturing `by_id` / `cache` in the
