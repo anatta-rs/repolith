@@ -240,3 +240,159 @@ path = "./a"
         other => panic!("expected InvalidArg, got {other:?}"),
     }
 }
+
+#[test]
+fn test_reject_url_with_newline() {
+    let toml = "
+[orchestrator]
+schema_version = \"0.1\"
+name = \"test\"
+
+[[node]]
+id = \"a\"
+git = \"https://example.com/r.git\\n--exec=evil\"
+path = \"./a\"
+
+  [[node.action]]
+  kind = \"git-clone\"
+";
+    match parse_err(toml) {
+        ManifestError::InvalidUrl { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("control character"),
+                "expected control-char reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidUrl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_ssh_url_with_leading_dash_in_userinfo() {
+    // `ssh://-oProxyCommand=evil@host/r.git` parses with user
+    // `-oProxyCommand=evil`. Git/ssh has historically been tricked into
+    // treating that as a flag — must reject at manifest parse time.
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+git = "ssh://-oProxyCommand=evil@host/r.git"
+path = "./a"
+
+  [[node.action]]
+  kind = "git-clone"
+"#;
+    match parse_err(toml) {
+        ManifestError::InvalidUrl { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("userinfo") && reason.contains("`-`"),
+                "expected userinfo-dash reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidUrl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_ssh_url_with_leading_dash_in_host() {
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+git = "ssh://-evilhost/r.git"
+path = "./a"
+
+  [[node.action]]
+  kind = "git-clone"
+"#;
+    match parse_err(toml) {
+        ManifestError::InvalidUrl { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("host") && reason.contains("`-`"),
+                "expected host-dash reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidUrl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_https_url_with_leading_dash_in_path() {
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+git = "https://host.example/-evil/r.git"
+path = "./a"
+
+  [[node.action]]
+  kind = "git-clone"
+"#;
+    match parse_err(toml) {
+        ManifestError::InvalidUrl { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("path segment") && reason.contains("`-`"),
+                "expected path-segment-dash reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidUrl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_scp_url_with_leading_dash_in_host() {
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+git = "git@-evil:org/repo.git"
+path = "./a"
+
+  [[node.action]]
+  kind = "git-clone"
+"#;
+    match parse_err(toml) {
+        ManifestError::InvalidUrl { node, reason } => {
+            assert_eq!(node, "a");
+            assert!(
+                reason.contains("host") && reason.contains("`-`"),
+                "expected host-dash reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidUrl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_accept_valid_scp_url() {
+    let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "test"
+
+[[node]]
+id = "a"
+git = "git@github.com:anatta-rs/repolith.git"
+path = "./a"
+
+  [[node.action]]
+  kind = "git-clone"
+"#;
+    Manifest::from_toml(toml).expect("valid SCP-style git URL must parse");
+}

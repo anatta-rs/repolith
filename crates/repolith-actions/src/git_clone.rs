@@ -44,9 +44,9 @@ impl Action for GitClone {
     }
 
     async fn input_hash(&self, ctx: &Ctx) -> Result<Sha256, BuildError> {
-        // `git ls-remote <url> HEAD` returns one line: `<sha1-hex>\tHEAD`.
+        // `git ls-remote -- <url> HEAD` returns one line: `<sha1-hex>\tHEAD`.
         let mut cmd = Command::new("git");
-        cmd.args(["ls-remote", &self.repo_url, "HEAD"]);
+        cmd.args(ls_remote_args(&self.repo_url));
         let out = run_with_cancel(cmd, &ctx.cancel).await?;
         if !out.status.success() {
             return Err(BuildError::UpstreamUnreachable(format!(
@@ -87,7 +87,7 @@ impl Action for GitClone {
                     .map_err(|e| BuildError::Io(format!("create_dir_all: {e}")))?;
             }
             let mut clone = Command::new("git");
-            clone.args(["clone", "--quiet", &self.repo_url, path_str]);
+            clone.args(clone_args(&self.repo_url, path_str));
             check_status(&run_with_cancel(clone, &ctx.cancel).await?)?;
         }
 
@@ -120,4 +120,49 @@ fn hash_url_and_sha(url: &str, sha1: &str) -> Sha256 {
     h.update(b":");
     h.update(sha1.as_bytes());
     Sha256(h.finalize().into())
+}
+
+// Defense-in-depth: every git subprocess that takes a user-supplied URL as
+// a positional argument receives `--` immediately before the URL so a
+// `-prefixed` URL that ever slips past the manifest validator can't be
+// parsed as a flag by git.
+fn ls_remote_args(url: &str) -> [&str; 4] {
+    ["ls-remote", "--", url, "HEAD"]
+}
+
+fn clone_args<'a>(url: &'a str, path: &'a str) -> [&'a str; 5] {
+    ["clone", "--quiet", "--", url, path]
+}
+
+#[cfg(test)]
+mod argv_tests {
+    use super::{clone_args, ls_remote_args};
+
+    fn assert_separator_before(args: &[&str], url: &str) {
+        let dash = args
+            .iter()
+            .position(|a| *a == "--")
+            .unwrap_or_else(|| panic!("`--` argv separator missing from {args:?}"));
+        let url_pos = args
+            .iter()
+            .position(|a| *a == url)
+            .unwrap_or_else(|| panic!("url `{url}` missing from {args:?}"));
+        assert!(
+            dash < url_pos,
+            "`--` (idx {dash}) must precede url (idx {url_pos}) in {args:?}"
+        );
+    }
+
+    #[test]
+    fn ls_remote_argv_has_separator() {
+        let url = "https://example.com/r.git";
+        assert_separator_before(&ls_remote_args(url), url);
+    }
+
+    #[test]
+    fn clone_argv_has_separator() {
+        let url = "https://example.com/r.git";
+        let path = "/tmp/r";
+        assert_separator_before(&clone_args(url, path), url);
+    }
 }
