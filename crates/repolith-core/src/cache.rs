@@ -37,4 +37,21 @@ pub trait Cache: Send + Sync {
     /// Persist `event`. After success, [`Self::last_build`] for the event's
     /// id must return this event.
     async fn record(&mut self, event: BuildEvent) -> Result<()>;
+
+    /// Persist `events` atomically — either every event lands or none.
+    ///
+    /// The orchestrator calls this at the end of each layer so a crash
+    /// mid-batch doesn't leave half the layer marked Success and the
+    /// other half un-persisted (which would re-run those actions on
+    /// the next sync, contradicting the cached Success).
+    ///
+    /// The default implementation is a non-atomic loop over [`Self::record`]
+    /// that suffices for in-memory backends; persistent backends
+    /// (`SQLite`, etc.) should override with a transaction.
+    async fn record_batch(&mut self, events: Vec<BuildEvent>) -> Result<()> {
+        for event in events {
+            self.record(event).await?;
+        }
+        Ok(())
+    }
 }

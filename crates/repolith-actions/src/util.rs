@@ -18,10 +18,19 @@ use tokio_util::sync::CancellationToken;
 ///
 /// Returns [`BuildError::Cancelled`] if the token fires first, or
 /// [`BuildError::Io`] if the process can't be spawned/waited on.
+///
+/// **Subprocess cleanup on cancel.** `kill_on_drop(true)` is applied
+/// before the `select!` so when the cancel branch wins (and the
+/// `cmd.output()` future is dropped), tokio fires `kill(2)` on the
+/// child as part of `Drop`. Without this the OS process keeps running
+/// until it exits naturally — observable as orphan `git`/`cargo`
+/// processes after `Ctrl-C`, and as cache files held by the orphan on
+/// the next `repolith sync`.
 pub(crate) async fn run_with_cancel(
     mut cmd: Command,
     cancel: &CancellationToken,
 ) -> Result<Output, BuildError> {
+    cmd.kill_on_drop(true);
     tokio::select! {
         result = cmd.output() => result.map_err(|e| BuildError::Io(format!("subprocess: {e}"))),
         () = cancel.cancelled() => Err(BuildError::Cancelled),

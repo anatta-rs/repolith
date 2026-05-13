@@ -85,13 +85,15 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
-    // Root cancellation token — wired to ctrl_c and into the orchestrator's
-    // Ctx so subprocesses see the cancel on their next .await.
+    // Root cancellation token — wired to ctrl_c + SIGTERM and into the
+    // orchestrator's Ctx so subprocesses see the cancel on their next
+    // .await poll. Either signal triggers the same cancel; whichever
+    // arrives first wins, the other becomes a no-op.
     let cancel = CancellationToken::new();
     let cancel_for_signal = cancel.clone();
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            tracing::info!("interrupt received, cancelling in-flight actions");
+        if let Some(reason) = wait_for_shutdown_signal().await {
+            tracing::info!("{reason} received, cancelling in-flight actions");
             cancel_for_signal.cancel();
         }
     });
@@ -170,6 +172,35 @@ fn filtered_env() -> std::collections::HashMap<String, String> {
     std::env::vars()
         .filter(|(k, _)| ENV_ALLOWLIST.iter().any(|allowed| *allowed == k))
         .collect()
+}
+
+/// Wait for either `SIGINT` (Ctrl-C) or `SIGTERM` (`kill <pid>`,
+/// systemd / container shutdown). Returns the human-readable name of
+/// whichever signal fired first, or `None` if registration fails.
+///
+/// Windows builds only watch `SIGINT` since `SIGTERM` is Unix-only;
+/// the CLI is officially Unix-targeted but the feature gate keeps the
+/// crate compilable on any platform tokio supports.
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> Option<&'static str> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("failed to register SIGTERM handler: {e}");
+            // Fall back to ctrl_c only.
+            return tokio::signal::ctrl_c().await.ok().map(|()| "SIGINT");
+        }
+    };
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result.ok().map(|()| "SIGINT"),
+        _ = term.recv() => Some("SIGTERM"),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> Option<&'static str> {
+    tokio::signal::ctrl_c().await.ok().map(|()| "SIGINT")
 }
 
 fn build_orchestrator(cli: &Cli, cancel: CancellationToken, jobs: usize) -> Result<Orchestrator> {

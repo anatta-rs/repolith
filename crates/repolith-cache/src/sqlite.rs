@@ -156,53 +156,87 @@ impl Cache for SqliteCache {
             let c = conn
                 .lock()
                 .map_err(|_| CacheError::Backend("connection mutex poisoned".into()))?;
-            match ev {
-                BuildEvent::Success {
-                    id,
-                    input,
-                    output,
-                    ms,
-                } => {
-                    c.execute(
-                        "INSERT OR REPLACE INTO build_events
-                         (action_id, input_hash, output_hash, status, started_at, ended_at, error_json)
-                         VALUES (?1, ?2, ?3, 'success', 0, ?4, NULL)",
-                        params![
-                            id.0,
-                            input.to_string(),
-                            output.to_string(),
-                            i64::try_from(ms).unwrap_or(i64::MAX)
-                        ],
-                    )
-                    .map_err(|e| CacheError::Backend(e.to_string()))?;
-                }
-                BuildEvent::Failed {
-                    id,
-                    input,
-                    error,
-                    ms,
-                } => {
-                    let err_json = serde_json::to_string(&error)
-                        .map_err(|e| CacheError::Backend(format!("serialize error: {e}")))?;
-                    c.execute(
-                        "INSERT OR REPLACE INTO build_events
-                         (action_id, input_hash, output_hash, status, started_at, ended_at, error_json)
-                         VALUES (?1, ?2, NULL, 'failed', 0, ?3, ?4)",
-                        params![
-                            id.0,
-                            input.to_string(),
-                            i64::try_from(ms).unwrap_or(i64::MAX),
-                            err_json
-                        ],
-                    )
-                    .map_err(|e| CacheError::Backend(e.to_string()))?;
-                }
+            insert_event(&c, &ev)
+        })
+        .await
+        .map_err(|e| CacheError::Backend(format!("spawn_blocking join: {e}")))?
+    }
+
+    /// Override the default `Cache::record_batch` impl with a single
+    /// `SQLite` transaction so the whole layer's events land atomically.
+    /// Without this the default loops `record` and any crash mid-batch
+    /// leaves the cache half-updated.
+    async fn record_batch(&mut self, events: Vec<BuildEvent>) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let conn = Arc::clone(&self.conn);
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut c = conn
+                .lock()
+                .map_err(|_| CacheError::Backend("connection mutex poisoned".into()))?;
+            let tx = c
+                .transaction()
+                .map_err(|e| CacheError::Backend(format!("begin transaction: {e}")))?;
+            for ev in &events {
+                insert_event(&tx, ev)?;
             }
+            tx.commit()
+                .map_err(|e| CacheError::Backend(format!("commit transaction: {e}")))?;
             Ok(())
         })
         .await
         .map_err(|e| CacheError::Backend(format!("spawn_blocking join: {e}")))?
     }
+}
+
+/// Insert (or replace) one [`BuildEvent`] row using `conn`. Pulled out
+/// of [`SqliteCache::record`] so [`SqliteCache::record_batch`] can run
+/// the same insertion inside a transaction.
+fn insert_event(conn: &Connection, ev: &BuildEvent) -> Result<()> {
+    match ev {
+        BuildEvent::Success {
+            id,
+            input,
+            output,
+            ms,
+        } => {
+            conn.execute(
+                "INSERT OR REPLACE INTO build_events
+                 (action_id, input_hash, output_hash, status, started_at, ended_at, error_json)
+                 VALUES (?1, ?2, ?3, 'success', 0, ?4, NULL)",
+                params![
+                    id.0,
+                    input.to_string(),
+                    output.to_string(),
+                    i64::try_from(*ms).unwrap_or(i64::MAX)
+                ],
+            )
+            .map_err(|e| CacheError::Backend(e.to_string()))?;
+        }
+        BuildEvent::Failed {
+            id,
+            input,
+            error,
+            ms,
+        } => {
+            let err_json = serde_json::to_string(error)
+                .map_err(|e| CacheError::Backend(format!("serialize error: {e}")))?;
+            conn.execute(
+                "INSERT OR REPLACE INTO build_events
+                 (action_id, input_hash, output_hash, status, started_at, ended_at, error_json)
+                 VALUES (?1, ?2, NULL, 'failed', 0, ?3, ?4)",
+                params![
+                    id.0,
+                    input.to_string(),
+                    i64::try_from(*ms).unwrap_or(i64::MAX),
+                    err_json
+                ],
+            )
+            .map_err(|e| CacheError::Backend(e.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_sha256(s: &str) -> Option<Sha256> {

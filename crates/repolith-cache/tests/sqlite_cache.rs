@@ -128,3 +128,61 @@ async fn open_creates_parent_dir() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn record_batch_persists_all_events() {
+    // The transactional override of `record_batch` should persist every
+    // event when called with a non-empty batch, leaving all of them
+    // visible to subsequent `last_build` calls. The default-impl loop
+    // would also pass this test — what we'd really like to assert is
+    // atomicity on failure, but we have no failing-INSERT path in M1
+    // (INSERT OR REPLACE never fails on conflict). This test at least
+    // locks the happy-path behavior.
+    let mut cache = SqliteCache::in_memory().unwrap();
+    let events = vec![
+        BuildEvent::Success {
+            id: ActionId("a".into()),
+            input: Sha256([1; 32]),
+            output: Sha256([2; 32]),
+            ms: 10,
+        },
+        BuildEvent::Success {
+            id: ActionId("b".into()),
+            input: Sha256([3; 32]),
+            output: Sha256([4; 32]),
+            ms: 20,
+        },
+        BuildEvent::Failed {
+            id: ActionId("c".into()),
+            input: Sha256([5; 32]),
+            error: BuildError::Cancelled,
+            ms: 30,
+        },
+    ];
+    cache.record_batch(events).await.unwrap();
+    assert!(matches!(
+        cache.last_build(&ActionId("a".into())).await,
+        Some(BuildEvent::Success { ms: 10, .. })
+    ));
+    assert!(matches!(
+        cache.last_build(&ActionId("b".into())).await,
+        Some(BuildEvent::Success { ms: 20, .. })
+    ));
+    assert!(matches!(
+        cache.last_build(&ActionId("c".into())).await,
+        Some(BuildEvent::Failed { ms: 30, .. })
+    ));
+}
+
+#[tokio::test]
+async fn record_batch_empty_is_noop() {
+    let mut cache = SqliteCache::in_memory().unwrap();
+    cache.record_batch(vec![]).await.unwrap();
+    assert!(
+        cache
+            .last_build(&ActionId("anything".into()))
+            .await
+            .is_none(),
+        "empty batch must not change cache state"
+    );
+}
