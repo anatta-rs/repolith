@@ -128,9 +128,9 @@ impl Action for CargoInstall {
                 }
             }
             CargoSource::Path { path } => {
-                let p = path
-                    .to_str()
-                    .ok_or_else(|| BuildError::Io(format!("non-utf8 source path: {}", path.display())))?;
+                let p = path.to_str().ok_or_else(|| {
+                    BuildError::Io(format!("non-utf8 source path: {}", path.display()))
+                })?;
                 cmd.args(["--path", p]);
             }
         }

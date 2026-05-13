@@ -121,4 +121,3 @@ fn hash_url_and_sha(url: &str, sha1: &str) -> Sha256 {
     h.update(sha1.as_bytes());
     Sha256(h.finalize().into())
 }
-

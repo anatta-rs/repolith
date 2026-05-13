@@ -5,6 +5,8 @@
 //! against each.
 //!
 //! Parse via [`Manifest::from_toml`], which both deserializes and validates.
+//!
+//! [`Manifest::from_toml`]: crate::manifest::Manifest::from_toml
 
 use crate::types::ActionId;
 use serde::{Deserialize, Serialize};
@@ -66,11 +68,14 @@ pub enum ActionEntry {
     /// `kind = "cargo-install"` — `cargo install` from the node's source tree.
     CargoInstall {
         /// Crate name (TOML key `crate`). Defaults to the node's `id` when absent.
-        #[serde(default, rename = "crate")] crate_name: Option<String>,
+        #[serde(default, rename = "crate")]
+        crate_name: Option<String>,
         /// Cargo features to enable.
-        #[serde(default)] features: Vec<String>,
+        #[serde(default)]
+        features: Vec<String>,
         /// Target install directory. Defaults to `~/.repolith/bin` when absent.
-        #[serde(default)] install_to: Option<PathBuf>,
+        #[serde(default)]
+        install_to: Option<PathBuf>,
     },
 }
 
@@ -88,7 +93,8 @@ pub enum Direction {
 #[derive(Debug, Error)]
 pub enum ManifestError {
     /// Underlying TOML deserialization failed (syntax error, type mismatch, unknown variant).
-    #[error("toml parse: {0}")] Toml(#[from] toml::de::Error),
+    #[error("toml parse: {0}")]
+    Toml(#[from] toml::de::Error),
     /// `orchestrator.schema_version` does not satisfy the `~0.1` requirement.
     #[error("schema version {got}: requires ~0.1")]
     SchemaMismatch {
@@ -96,9 +102,11 @@ pub enum ManifestError {
         got: String,
     },
     /// Two or more `[[node]]` entries share the same `id`.
-    #[error("duplicate node id: {0}")] DuplicateNodeId(String),
+    #[error("duplicate node id: {0}")]
+    DuplicateNodeId(String),
     /// A `[[node]]` declares neither a `git` URL nor a local `path`.
-    #[error("node {0} has neither `git` nor `path`")] NodeMissingSource(String),
+    #[error("node {0} has neither `git` nor `path`")]
+    NodeMissingSource(String),
 }
 
 impl Manifest {
@@ -121,9 +129,13 @@ impl Manifest {
         // schema_version is in 0.1.x range
         let req = semver::VersionReq::parse("~0.1").unwrap();
         let v = semver::Version::parse(&format!("{}.0", self.orchestrator.schema_version))
-            .map_err(|_| ManifestError::SchemaMismatch { got: self.orchestrator.schema_version.clone() })?;
+            .map_err(|_| ManifestError::SchemaMismatch {
+                got: self.orchestrator.schema_version.clone(),
+            })?;
         if !req.matches(&v) {
-            return Err(ManifestError::SchemaMismatch { got: self.orchestrator.schema_version.clone() });
+            return Err(ManifestError::SchemaMismatch {
+                got: self.orchestrator.schema_version.clone(),
+            });
         }
         // unique node ids
         let mut seen = std::collections::HashSet::new();
@@ -146,9 +158,14 @@ impl Manifest {
     /// rely on this for deterministic builds.
     #[must_use]
     pub fn action_ids(&self) -> Vec<ActionId> {
-        self.nodes.iter()
-            .flat_map(|n| n.actions.iter().enumerate()
-                .map(move |(i, a)| ActionId(format!("{}::{}::{}", n.id, action_kind(a), i))))
+        self.nodes
+            .iter()
+            .flat_map(|n| {
+                n.actions
+                    .iter()
+                    .enumerate()
+                    .map(move |(i, a)| ActionId(format!("{}::{}::{}", n.id, action_kind(a), i)))
+            })
             .collect()
     }
 }

@@ -1,8 +1,8 @@
 //! Fundamental data types for the repolith orchestration engine.
 use std::collections::HashMap;
-use tokio_util::sync::CancellationToken;
-use std::path::PathBuf;
 use std::fmt::Display;
+use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
 /// A unique identifier for an action in the graph.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -37,11 +37,11 @@ pub struct Ctx {
 
 /// Determines how the orchestration engine handles failures.
 #[derive(Copy, Clone, serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
-pub enum ExecMode { 
+pub enum ExecMode {
     /// Stop execution immediately upon the first failure.
-    FailFast, 
+    FailFast,
     /// Continue executing independent actions even if some fail.
-    KeepGoing
+    KeepGoing,
 }
 
 /// Errors that can occur during the execution of an action.
@@ -52,19 +52,19 @@ pub enum BuildError {
     UpstreamUnreachable(String),
     /// The command executed by the action returned a non-zero exit code.
     #[error("Command failed: {exit_code}: {stderr}")]
-    CommandFailed{ 
+    CommandFailed {
         /// The exit code returned by the command.
-        exit_code: i32, 
+        exit_code: i32,
         /// The standard error output of the command.
-        stderr: String 
+        stderr: String,
     },
     /// An I/O error occurred (e.g., file not found, permission denied).
     #[error("IO error: {0}")]
-    Io(String), 
+    Io(String),
     /// The build was cancelled by the user or the system.
     #[error("Build cancelled")]
     Cancelled,
-} 
+}
 
 /// The result of a successfully executed action.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -79,7 +79,7 @@ pub struct BuildOutput {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BuildEvent {
     /// The action succeeded.
-    Success{
+    Success {
         /// The ID of the action.
         id: ActionId,
         /// The input hash or identifier.
@@ -125,7 +125,10 @@ mod tests {
         let err1 = BuildError::UpstreamUnreachable("dep-1".to_string());
         assert_eq!(err1.to_string(), "upstream unreachable: dep-1");
 
-        let err2 = BuildError::CommandFailed { exit_code: 1, stderr: "boom".to_string() };
+        let err2 = BuildError::CommandFailed {
+            exit_code: 1,
+            stderr: "boom".to_string(),
+        };
         assert_eq!(err2.to_string(), "Command failed: 1: boom");
 
         let err3 = BuildError::Io("file not found".to_string());
@@ -170,7 +173,10 @@ mod tests {
         assert_eq!(mode, deserialized);
 
         // BuildError
-        let err = BuildError::CommandFailed { exit_code: 42, stderr: "err".to_string() };
+        let err = BuildError::CommandFailed {
+            exit_code: 42,
+            stderr: "err".to_string(),
+        };
         let serialized = serde_json::to_string(&err).unwrap();
         let deserialized: BuildError = serde_json::from_str(&serialized).unwrap();
         match deserialized {

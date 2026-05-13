@@ -6,9 +6,7 @@
 use async_trait::async_trait;
 use repolith_cache::{Cache, Result as CacheResult};
 use repolith_core::action::Action;
-use repolith_core::types::{
-    ActionId, BuildError, BuildEvent, BuildOutput, Ctx, ExecMode, Sha256,
-};
+use repolith_core::types::{ActionId, BuildError, BuildEvent, BuildOutput, Ctx, ExecMode, Sha256};
 use repolith_engine::orchestrator::{BuilderError, ExecError, Orchestrator};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -94,9 +92,7 @@ impl Action for TestAction {
         self.state.bump_max(cur);
 
         let result = match self.behavior {
-            Behavior::FailImmediately => Err(BuildError::UpstreamUnreachable(
-                self.id.0.clone(),
-            )),
+            Behavior::FailImmediately => Err(BuildError::UpstreamUnreachable(self.id.0.clone())),
             Behavior::SucceedAfter(d) => {
                 tokio::select! {
                     () = tokio::time::sleep(d) => {

@@ -24,7 +24,7 @@ pub enum CacheError {
 /// A specialized `Result` type for cache operations.
 pub type Result<T> = std::result::Result<T, CacheError>;
 
-/// Persistent store for [`BuildEvent`]s, keyed by [`ActionId`].
+/// Persistent store for `BuildEvent`s, keyed by [`ActionId`].
 ///
 /// The cache lets the [planner](crate::plan::Plan) compare current input
 /// hashes against the last recorded build, and lets the orchestrator persist

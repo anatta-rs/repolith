@@ -1,12 +1,12 @@
 //! Build plan — immutable DAG snapshot with staleness reasons.
 //!
-//! [`Plan::compute`] traverses the action graph topologically (Kahn layers)
+//! `Plan::compute` traverses the action graph topologically (Kahn layers)
 //! and decides which actions are stale by comparing their current input hash
-//! against the last recorded [`BuildEvent`] in the [cache](crate::cache::Cache).
+//! against the last recorded `BuildEvent` in the [cache](crate::cache::Cache).
 //! Stale-ness cascades: an action whose hash didn't change but which depends
-//! on a stale ancestor is marked [`ChangeReason::UpstreamMoved`].
+//! on a stale ancestor is marked `ChangeReason::UpstreamMoved`.
 //!
-//! The resulting [`Plan`] is owned, cloneable, and can be replayed any number
+//! The resulting `Plan` is owned, cloneable, and can be replayed any number
 //! of times by the orchestrator (with `--dry-run`, `--explain`, etc.).
 
 use crate::action::Action;
@@ -101,8 +101,7 @@ impl Plan {
     ) -> std::result::Result<Self, PlanError> {
         // 1. Build inbound + dependents maps.
         let ids: HashSet<ActionId> = actions.iter().map(|a| a.id()).collect();
-        let mut inbound: HashMap<ActionId, usize> =
-            ids.iter().map(|i| (i.clone(), 0)).collect();
+        let mut inbound: HashMap<ActionId, usize> = ids.iter().map(|i| (i.clone(), 0)).collect();
         let mut dependents: HashMap<ActionId, Vec<ActionId>> = HashMap::new();
 
         for a in actions {
@@ -174,19 +173,18 @@ impl Plan {
                     Some(BuildEvent::Success { input, .. }) if input != now => {
                         reasons.insert(
                             id.clone(),
-                            ChangeReason::InputHashChanged { from: input, to: now },
+                            ChangeReason::InputHashChanged {
+                                from: input,
+                                to: now,
+                            },
                         );
                         stale.insert(id.clone());
                     }
                     Some(BuildEvent::Success { .. }) => {
                         // Hash unchanged — cascade if any dep is stale.
-                        if let Some(stale_dep) =
-                            a.deps().into_iter().find(|d| stale.contains(d))
-                        {
-                            reasons.insert(
-                                id.clone(),
-                                ChangeReason::UpstreamMoved { dep: stale_dep },
-                            );
+                        if let Some(stale_dep) = a.deps().into_iter().find(|d| stale.contains(d)) {
+                            reasons
+                                .insert(id.clone(), ChangeReason::UpstreamMoved { dep: stale_dep });
                             stale.insert(id.clone());
                         }
                     }

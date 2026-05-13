@@ -55,10 +55,7 @@ fn make_bare_repo() -> (TempDir, PathBuf, String) {
     run_git(&work, &["commit", "-m", "initial"]);
     // Push the default branch as HEAD on the bare remote.
     run_git(&work, &["branch", "-M", "main"]);
-    run_git(
-        &work,
-        &["push", bare.to_str().unwrap(), "main:main"],
-    );
+    run_git(&work, &["push", bare.to_str().unwrap(), "main:main"]);
     // Make `main` the bare repo's HEAD so `ls-remote HEAD` resolves it.
     run_git(&bare, &["symbolic-ref", "HEAD", "refs/heads/main"]);
 
@@ -166,7 +163,10 @@ async fn second_execute_updates() {
 
     // Push a new commit to the bare repo from a separate working tree.
     let updater = guard.path().join("updater");
-    run_git(guard.path(), &["clone", bare.to_str().unwrap(), updater.to_str().unwrap()]);
+    run_git(
+        guard.path(),
+        &["clone", bare.to_str().unwrap(), updater.to_str().unwrap()],
+    );
     run_git(&updater, &["config", "user.email", "test@example.com"]);
     run_git(&updater, &["config", "user.name", "Test"]);
     run_git(&updater, &["config", "commit.gpgsign", "false"]);

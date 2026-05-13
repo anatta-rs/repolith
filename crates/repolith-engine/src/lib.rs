@@ -1,7 +1,4 @@
-//! Async runtime for repolith — the engine that turns a [`Plan`] into [`BuildEvent`]s.
-//!
-//! [`Plan`]: repolith_core::plan::Plan
-//! [`BuildEvent`]: repolith_core::types::BuildEvent
+//! Async runtime for repolith — the engine that turns a `Plan` into `BuildEvent`s.
 //!
 //! `repolith-core` stays a pure types/traits crate. This crate adds the
 //! parallel layer executor on top, with cancellation, semaphore-based
