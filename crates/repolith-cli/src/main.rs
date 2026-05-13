@@ -141,6 +141,37 @@ fn default_cache_path() -> PathBuf {
         .join("cache.db")
 }
 
+/// Environment variables propagated into [`Ctx`]. The full process env
+/// would otherwise be cloned per layer + per spawned action and could
+/// leak credentials (`AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, …) through
+/// any future `tracing::debug!(?ctx)` or panic dump (CWE-200).
+///
+/// The allowlist covers what `git`, `cargo`, and `rustup` need to find
+/// their toolchains and respect locale preferences. Anything else stays
+/// in the parent process env and never enters the orchestrator's data
+/// flow.
+const ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "TMPDIR",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "RUST_LOG",
+    "RUST_BACKTRACE",
+    "TZ",
+    "LANG",
+    "LC_ALL",
+];
+
+fn filtered_env() -> std::collections::HashMap<String, String> {
+    std::env::vars()
+        .filter(|(k, _)| ENV_ALLOWLIST.iter().any(|allowed| *allowed == k))
+        .collect()
+}
+
 fn build_orchestrator(cli: &Cli, cancel: CancellationToken, jobs: usize) -> Result<Orchestrator> {
     let manifest = load_manifest(&cli.manifest)?;
     let actions = factory::build_actions_from_manifest(&manifest)?;
@@ -152,7 +183,7 @@ fn build_orchestrator(cli: &Cli, cancel: CancellationToken, jobs: usize) -> Resu
     let base_ctx = Ctx {
         cancel,
         workdir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        env: std::env::vars().collect(),
+        env: filtered_env(),
     };
 
     let mut builder = Orchestrator::builder()

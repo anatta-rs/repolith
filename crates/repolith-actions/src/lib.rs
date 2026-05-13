@@ -25,6 +25,11 @@
 #[cfg(any(feature = "git", feature = "cargo"))]
 pub(crate) mod util;
 
+/// Path utilities (tilde expansion). Public so the manifest factory in the
+/// CLI can apply the same expansion to `node.path` that `cargo_install`
+/// already applies to `install_to`.
+pub mod paths;
+
 /// `GitClone` action — mirror a remote git repository into a local path.
 #[cfg(feature = "git")]
 pub mod git_clone;

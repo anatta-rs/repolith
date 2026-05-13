@@ -11,6 +11,7 @@
 use anyhow::{Context, Result, bail};
 use repolith_actions::cargo_install::{CargoInstall, CargoSource};
 use repolith_actions::git_clone::GitClone;
+use repolith_actions::paths::expand_tilde;
 use repolith_core::action::Action;
 use repolith_core::manifest::{ActionEntry, Manifest};
 use repolith_core::types::ActionId;
@@ -53,8 +54,8 @@ pub fn build_actions_from_manifest(manifest: &Manifest) -> Result<Vec<Box<dyn Ac
                     })?;
                     let path = node
                         .path
-                        .clone()
-                        .unwrap_or_else(|| PathBuf::from(format!("./{}", node.id)));
+                        .as_deref()
+                        .map_or_else(|| PathBuf::from(format!("./{}", node.id)), expand_tilde);
                     Box::new(GitClone {
                         id: id.clone(),
                         repo_url: url,
@@ -68,7 +69,9 @@ pub fn build_actions_from_manifest(manifest: &Manifest) -> Result<Vec<Box<dyn Ac
                     install_to,
                 } => {
                     let source = if let Some(p) = &node.path {
-                        CargoSource::Path { path: p.clone() }
+                        CargoSource::Path {
+                            path: expand_tilde(p),
+                        }
                     } else if let Some(url) = &node.git {
                         CargoSource::Git {
                             url: url.clone(),
@@ -85,7 +88,9 @@ pub fn build_actions_from_manifest(manifest: &Manifest) -> Result<Vec<Box<dyn Ac
                         source,
                         crate_name: crate_name.clone().or_else(|| Some(node.id.clone())),
                         features: features.clone(),
-                        install_to: install_to.clone().unwrap_or_else(default_install_to),
+                        install_to: install_to
+                            .as_deref()
+                            .map_or_else(default_install_to, expand_tilde),
                         deps,
                     })
                 }
