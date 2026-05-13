@@ -12,8 +12,27 @@ use async_trait::async_trait;
 use repolith_core::action::Action;
 use repolith_core::types::{ActionId, BuildError, BuildOutput, Ctx, Sha256};
 use sha2::{Digest, Sha256 as ShaHasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
+
+/// Expand a leading `~/` or bare `~` in `p` to `dirs::home_dir()`. Other
+/// paths (absolute, relative without `~`) are returned unchanged. Cargo
+/// itself does not perform this expansion, so manifests that write
+/// `install_to = "~/.repolith/bin"` would otherwise get a literal `~`
+/// directory in the cwd.
+fn expand_tilde(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    } else if s == "~"
+        && let Some(home) = dirs::home_dir()
+    {
+        return home;
+    }
+    p.to_path_buf()
+}
 
 /// Where `cargo install` should pull the crate from.
 #[derive(Clone, Debug)]
@@ -113,10 +132,10 @@ impl Action for CargoInstall {
     }
 
     async fn execute(&self, ctx: &Ctx) -> Result<BuildOutput, BuildError> {
-        let install_to = self
-            .install_to
-            .to_str()
-            .ok_or_else(|| BuildError::Io(format!("non-utf8 install_to: {:?}", self.install_to)))?;
+        let install_root = expand_tilde(&self.install_to);
+        let install_to = install_root.to_str().ok_or_else(|| {
+            BuildError::Io(format!("non-utf8 install_to: {}", install_root.display()))
+        })?;
 
         let mut cmd = Command::new("cargo");
         cmd.arg("install");
