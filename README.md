@@ -79,9 +79,10 @@ in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Status
 
-**v0.0.2 shipped.** 5 crates, 2 builtin actions, parallel layered
+**v0.0.3 shipped.** 5 crates, 2 builtin actions, parallel layered
 execution with cancellation, SQLite cache (WAL), URL-injection
-hardening, process-group cancel propagation, 75 workspace tests.
+hardening, process-group cancel propagation. Full test suite under
+`cargo test --workspace --all-features` (80+ tests at last count).
 
 > **CI status.** GitHub Actions runs are temporarily paused while the
 > upstream Actions billing is being sorted out — the workflow in

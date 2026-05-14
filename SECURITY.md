@@ -54,13 +54,17 @@ as you would treat reviewing a new shell script that runs `git`,
   defense in depth. Crate names and feature names that start with `-` or
   contain `,` are rejected at manifest parse time.
 - **Environment leak (CWE-200)** — the orchestrator's `Ctx::env` only
-  carries an allowlisted subset of the parent process env (`PATH`,
-  `HOME`, `USER`, `SHELL`, `TMPDIR`, `CARGO_HOME`, `RUSTUP_HOME`,
-  `RUSTUP_TOOLCHAIN`, `RUST_LOG`, `RUST_BACKTRACE`, `TZ`, `LANG`,
-  `LC_ALL`). Tokens like `GITHUB_TOKEN`, `AWS_SECRET_ACCESS_KEY`, etc.
-  remain in the parent process and never enter `repolith`'s data flow,
-  so they can't leak through a `tracing::debug!(?ctx)` call or a panic
-  dump.
+  carries an allowlisted subset of the parent process env. The list
+  itself lives at `ENV_ALLOWLIST` in
+  [`crates/repolith-cli/src/main.rs`](crates/repolith-cli/src/main.rs)
+  — refer to source for the current set; enumerating it here would
+  drift on every change. Tokens like `GITHUB_TOKEN`,
+  `AWS_SECRET_ACCESS_KEY`, etc. remain in the parent process and never
+  enter `repolith`'s data flow, so they can't leak through a
+  `tracing::debug!(?ctx)` call or a panic dump. SDK consumers of
+  `repolith-engine` must pass an explicit `Ctx::env` to `.base_ctx(...)`
+  — the engine's default builder ships an **empty** env map for the
+  same reason.
 - **SQL injection** — every cache write goes through `rusqlite::params!`
   parameterized queries; no string concatenation reaches the SQLite
   driver.
