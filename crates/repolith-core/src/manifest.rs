@@ -152,10 +152,18 @@ fn check_no_leading_dash(value: &str, node: &str, field: &str) -> Result<(), Man
     Ok(())
 }
 
-/// Reject node ids that would let the manifest escape the workspace when
-/// used to construct a default clone path (`./{id}`): empty ids, ids
-/// containing path separators (`/`, `\`), and the literal `.` / `..`
-/// path-traversal tokens.
+/// Reject node ids that would let the manifest escape the workspace
+/// when used to construct a default clone path (`./{id}`):
+///
+/// - Empty ids (no directory).
+/// - Path separators `/` and `\`.
+/// - Drive-letter / alternate-data-stream separator `:` — on Windows
+///   `id = "C:foo"` makes `PathBuf::from("./C:foo")` resolve drive-relative
+///   and escape the workspace.
+/// - Control characters — NUL truncates at the syscall layer (the path
+///   actually opened on Unix is `./foo` not `./foo\0bar`); newlines confuse
+///   downstream tooling.
+/// - The literal `.` / `..` path-traversal tokens.
 fn check_node_id_safe(id: &str) -> Result<(), ManifestError> {
     if id.is_empty() {
         return Err(ManifestError::InvalidArg {
@@ -163,12 +171,18 @@ fn check_node_id_safe(id: &str) -> Result<(), ManifestError> {
             reason: "node id is empty".to_string(),
         });
     }
-    if let Some(c) = id.chars().find(|c| matches!(c, '/' | '\\')) {
+    if let Some(c) = id.chars().find(|c| matches!(c, '/' | '\\' | ':')) {
         return Err(ManifestError::InvalidArg {
             node: id.to_string(),
             reason: format!(
-                "node id `{id}` contains path separator `{c}` — would create nested or escaping directories"
+                "node id `{id}` contains path separator `{c}` — would create nested, escaping, or drive-relative directories"
             ),
+        });
+    }
+    if let Some(c) = id.chars().find(|c| c.is_control()) {
+        return Err(ManifestError::InvalidArg {
+            node: id.to_string(),
+            reason: format!("node id contains control character U+{:04X}", c as u32),
         });
     }
     if id == "." || id == ".." {

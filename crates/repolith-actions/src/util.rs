@@ -71,25 +71,26 @@ pub(crate) async fn run_with_cancel(
 }
 
 /// SIGTERM the process group, wait [`SIGTERM_GRACE`], then escalate to
-/// SIGKILL — but only if the group leader is still alive. The liveness
-/// check guards against PID recycling: if the leader was already reaped
+/// SIGKILL — but only if the group still has live members. The liveness
+/// check guards against PID recycling: if every group member was reaped
 /// during the grace window, the kernel can recycle that pgid for an
-/// unrelated process, and an unconditional `killpg(pgid, SIGKILL)` would
+/// unrelated group, and an unconditional `killpg(pgid, SIGKILL)` would
 /// signal strangers. Errors from `killpg` are swallowed (the only
 /// expected failure is "no such group", which is the desired end state).
 #[cfg(unix)]
 async fn kill_group(pgid: i32) {
     use nix::errno::Errno;
-    use nix::sys::signal::{Signal, kill, killpg};
+    use nix::sys::signal::{Signal, killpg};
     use nix::unistd::Pid;
     let pg = Pid::from_raw(pgid);
     let _ = killpg(pg, Signal::SIGTERM);
     tokio::time::sleep(SIGTERM_GRACE).await;
-    // `kill(pid, 0)` with pid == leader's pid checks whether the leader is
-    // still alive. ESRCH means it's gone; anything else (alive, or EPERM
-    // because we lost permission across exec) is treated as "still up, go
-    // ahead and SIGKILL".
-    if !matches!(kill(pg, None), Err(Errno::ESRCH)) {
+    // Probe the *group*, not the leader. `killpg(pg, None)` (signal 0)
+    // performs the standard kernel error-checks without delivering a
+    // signal — ESRCH iff no process has this pgid. Probing only the
+    // leader's pid would incorrectly skip SIGKILL when the leader exited
+    // but a stubborn grandchild (rustc, ssh, mold) is still in the group.
+    if !matches!(killpg(pg, None), Err(Errno::ESRCH)) {
         let _ = killpg(pg, Signal::SIGKILL);
     }
 }
@@ -214,6 +215,60 @@ mod tests {
         assert!(
             elapsed >= SIGTERM_GRACE && elapsed < SIGTERM_GRACE * 3,
             "kill_group took {elapsed:?}, expected ~{SIGTERM_GRACE:?}"
+        );
+    }
+
+    /// Regression for the cycle-3 audit finding: in PR47 the liveness probe
+    /// was `kill(pg, None)` (probes the *leader*), so a stubborn grandchild
+    /// outliving the leader had its SIGKILL skipped. The fix is to probe
+    /// the *group* via `killpg(pg, None)`. This test starts a shell that
+    /// forks a `sleep` grandchild; we then SIGTERM-ignore the shell so the
+    /// leader exits while the grandchild keeps running, then call
+    /// `kill_group` and verify the grandchild is reaped.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_group_kills_grandchild_after_leader_exits() {
+        use nix::errno::Errno;
+        use nix::sys::signal::kill;
+        use nix::unistd::Pid;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pidfile = tmp.path().join("sleep.pid");
+        // The shell traps SIGTERM as a no-op, then exits 0 immediately
+        // after forking the sleep into the background. Net: leader dead,
+        // grandchild alive — the exact shape that exposed the regression.
+        let script = format!(
+            r"trap '' TERM ; sleep 30 & echo $! > {} ; exit 0",
+            pidfile.to_str().unwrap()
+        );
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &script]);
+        cmd.process_group(0);
+        let child = cmd.spawn().expect("spawn");
+        let pgid = i32::try_from(child.id().expect("pid")).expect("pid fits");
+
+        // Wait until the pidfile appears + the leader exits.
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if pidfile.exists()
+                && std::fs::metadata(&pidfile).is_ok_and(|m| m.len() > 0)
+            {
+                break;
+            }
+        }
+        let pid_text = std::fs::read_to_string(&pidfile).expect("pidfile must be written");
+        let grandchild_pid: i32 = pid_text.trim().parse().expect("pid is a number");
+        let _ = child.wait_with_output().await; // reap the leader
+
+        // Now kill_group should detect the group is non-empty (grandchild
+        // still alive) and SIGKILL it.
+        kill_group(pgid).await;
+
+        // Give the kernel a beat to deliver and reap.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let probe = kill(Pid::from_raw(grandchild_pid), None);
+        assert!(
+            matches!(probe, Err(Errno::ESRCH)),
+            "grandchild pid {grandchild_pid} still alive after leader exited and kill_group ran: {probe:?}"
         );
     }
 }

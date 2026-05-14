@@ -499,3 +499,48 @@ path = "./a"
 "#;
     Manifest::from_toml(toml).expect("inner-dotdot node id must parse");
 }
+
+#[test]
+fn test_reject_node_id_with_colon() {
+    // Windows drive-letter bypass: `C:foo` resolves to a drive-relative
+    // path on Windows and escapes the workspace. The `:` rejection also
+    // covers alternate-data-stream selectors (`name:stream`).
+    match parse_err_for_id("C:foo") {
+        ManifestError::InvalidArg { node, reason } => {
+            assert_eq!(node, "C:foo");
+            assert!(
+                reason.contains("path separator") && reason.contains(':'),
+                "expected colon-separator reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_reject_node_id_with_nul() {
+    // NUL byte truncates at the syscall layer — `./foo\0bar` opens
+    // `./foo`, not what the manifest declared. Reject explicitly.
+    let toml = "
+[orchestrator]
+schema_version = \"0.1\"
+name = \"test\"
+
+[[node]]
+id = \"foo\\u0000bar\"
+git = \"https://example.com/r.git\"
+path = \"./a\"
+
+  [[node.action]]
+  kind = \"git-clone\"
+";
+    match Manifest::from_toml(toml).expect_err("manifest must fail validation") {
+        ManifestError::InvalidArg { reason, .. } => {
+            assert!(
+                reason.contains("control character"),
+                "expected control-char reason, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}

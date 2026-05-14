@@ -156,11 +156,14 @@ const ENV_ALLOWLIST: &[&str] = &[
     "TZ",
     "LANG",
     "LC_ALL",
-    // Private-repo / SSH support — without these, `git clone` over ssh
-    // can't reach the running ssh-agent and falls back to interactive
-    // prompts which fail under piped stdio.
+    // Private-repo / SSH support — `SSH_AUTH_SOCK` is just a UNIX-domain
+    // socket path; safe to forward so `git clone` over ssh can reach the
+    // running ssh-agent. Note: `GIT_SSH_COMMAND` is intentionally NOT in
+    // this list — git evaluates it as a shell command on every invocation,
+    // so a hostile parent env containing `GIT_SSH_COMMAND='sh -c "evil"'`
+    // would be RCE. Operators who genuinely need a custom SSH wrapper can
+    // construct an `Orchestrator` directly and pass an explicit `Ctx::env`.
     "SSH_AUTH_SOCK",
-    "GIT_SSH_COMMAND",
     // `~/.config` overrides — `git` reads `$XDG_CONFIG_HOME/git/config`
     // when set; without the passthrough, custom git config is silently
     // ignored.
