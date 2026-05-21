@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2026-05-14
+
+Docs-only patch release. No code, no API surface changes — just a README
+polish ahead of the public open.
+
+### Docs
+
+- **README polish ([#55])** — landing-page rewrite:
+  - centered header with 5 badges (CI · License · Rust 1.85+ · v0.0.4 · PRs welcome);
+  - tagline (`⚡ Parallel · 🛑 Cancellation-aware · 💾 Cache-first`);
+  - new "What it looks like" section with a real terminal demo
+    (status → sync --dry-run → sync → no-op sync);
+  - new "Why use it" section with 5 concrete bullets, including the
+    hardened-argv story added in v0.0.3;
+  - "What it is NOT" hoisted before "Quick start" (the question most
+    readers have before they install anything);
+  - clickable crate table linking to `crates/<name>` directories;
+  - Status block bumped to v0.0.4 + one-line note about the three
+    pre-public audit cycles that closed all must-fix items;
+  - new top-level "Security" section pointing at SECURITY.md.
+- **Supersedes PR [#30]** — the open README-polish PR predated the audit
+  cycles and conflicted on every facts-bearing line (test count, version,
+  removed `init` subcommand). #55 absorbs the original design intent
+  (badges, terminal demo, hoisted is-NOT, clickable crates) fresh against
+  v0.0.3.
+
+### Closed PRs
+
+[#30] · [#55]
+
+[#30]: https://github.com/anatta-rs/repolith/pull/30
+[#55]: https://github.com/anatta-rs/repolith/pull/55
+
 ## [0.0.3] - 2026-05-13
 
 The pre-public-open polish release. Two audit cycles on top of the v0.0.2
