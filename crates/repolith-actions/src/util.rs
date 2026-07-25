@@ -163,9 +163,7 @@ mod tests {
         // Wait until the pidfile appears (grandchild started).
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            if pidfile.exists()
-                && std::fs::metadata(&pidfile).is_ok_and(|m| m.len() > 0)
-            {
+            if pidfile.exists() && std::fs::metadata(&pidfile).is_ok_and(|m| m.len() > 0) {
                 break;
             }
         }
@@ -249,9 +247,7 @@ mod tests {
         // Wait until the pidfile appears + the leader exits.
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            if pidfile.exists()
-                && std::fs::metadata(&pidfile).is_ok_and(|m| m.len() > 0)
-            {
+            if pidfile.exists() && std::fs::metadata(&pidfile).is_ok_and(|m| m.len() > 0) {
                 break;
             }
         }

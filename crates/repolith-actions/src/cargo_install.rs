@@ -158,9 +158,9 @@ impl Action for CargoInstall {
         // multi-MB) read instead of blocking it like `std::fs::read` did.
         let bin_name = format!("{crate_name}{}", std::env::consts::EXE_SUFFIX);
         let bin = install_root.join("bin").join(&bin_name);
-        let bytes = tokio::fs::read(&bin).await.map_err(|e| {
-            BuildError::Io(format!("read installed binary {}: {e}", bin.display()))
-        })?;
+        let bytes = tokio::fs::read(&bin)
+            .await
+            .map_err(|e| BuildError::Io(format!("read installed binary {}: {e}", bin.display())))?;
         let mut h = ShaHasher::new();
         h.update(&bytes);
         Ok(BuildOutput {
