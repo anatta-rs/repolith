@@ -75,7 +75,7 @@ pub struct Manifest {
 }
 
 /// Tagged variant of `[[node.action]]`, dispatched by the TOML `kind` field
-/// (kebab-case: `"git-clone"`, `"cargo-install"`).
+/// (kebab-case: `"git-clone"`, `"cargo-install"`, `"docker"`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ActionEntry {
@@ -92,6 +92,25 @@ pub enum ActionEntry {
         /// Target install directory. Defaults to `~/.repolith/bin` when absent.
         #[serde(default)]
         install_to: Option<PathBuf>,
+    },
+    /// `kind = "docker"` — `docker build` an image from the node's checkout.
+    ///
+    /// Build-only by design: running containers is process supervision,
+    /// which repolith explicitly does not do (see README "What it is NOT").
+    Docker {
+        /// Image tag to apply (`-t`). Required; validated against the
+        /// docker reference charset and the no-leading-dash rule.
+        tag: String,
+        /// Dockerfile path relative to the build context. Defaults to
+        /// `Dockerfile`. Must stay inside the node's checkout: relative,
+        /// no `..` component, no leading dash, no control characters.
+        #[serde(default)]
+        dockerfile: Option<PathBuf>,
+        /// Build context directory relative to the node's `path`.
+        /// Defaults to the node's `path` itself. Same containment rules
+        /// as `dockerfile`.
+        #[serde(default)]
+        context: Option<PathBuf>,
     },
 }
 
@@ -293,6 +312,93 @@ fn check_scp_url(url: &str, node: &str) -> Result<(), ManifestError> {
     Ok(())
 }
 
+/// Lexical containment check for `docker` action paths (`dockerfile`,
+/// `context`), mirroring [`check_node_id_safe`]. Runs at parse time with
+/// no filesystem access, so it can only guarantee the *lexical* form —
+/// symlink escapes are caught at run time by the action's canonicalize
+/// check (defense in depth).
+///
+/// Rejected:
+/// - Absolute paths — the whole point of these fields is "inside the
+///   node's checkout".
+/// - Any `..` component — lexical directory traversal.
+/// - A leading `-` on the path — `docker` would parse it as a flag
+///   (CWE-88), even behind `-f`/`--`.
+/// - Control characters — NUL truncates at the syscall layer, newlines
+///   confuse downstream tooling.
+fn check_docker_path_safe(
+    path: &std::path::Path,
+    node: &str,
+    field: &str,
+) -> Result<(), ManifestError> {
+    let s = path.to_string_lossy();
+    if s.is_empty() {
+        return Err(ManifestError::InvalidArg {
+            node: node.to_string(),
+            reason: format!("`{field}` is empty"),
+        });
+    }
+    if let Some(c) = s.chars().find(|c| c.is_control()) {
+        return Err(ManifestError::InvalidArg {
+            node: node.to_string(),
+            reason: format!("`{field}` contains control character U+{:04X}", c as u32),
+        });
+    }
+    if s.starts_with('-') {
+        return Err(ManifestError::InvalidArg {
+            node: node.to_string(),
+            reason: format!("`{field}` `{s}` starts with `-`, would be parsed as a CLI flag"),
+        });
+    }
+    if path.is_absolute() {
+        return Err(ManifestError::InvalidArg {
+            node: node.to_string(),
+            reason: format!("`{field}` `{s}` is absolute — must stay inside the node's checkout"),
+        });
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(ManifestError::InvalidArg {
+            node: node.to_string(),
+            reason: format!(
+                "`{field}` `{s}` contains `..` — path traversal outside the node's checkout"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Validate a `docker` action image tag: non-empty, no leading dash
+/// (CWE-88), and restricted to the docker reference charset
+/// (`[a-zA-Z0-9._:/-]`) so the value can never smuggle whitespace or
+/// shell-relevant bytes into the `-t` argument.
+fn check_docker_tag(tag: &str, node: &str) -> Result<(), ManifestError> {
+    if tag.is_empty() {
+        return Err(ManifestError::InvalidArg {
+            node: node.to_string(),
+            reason: "`tag` is empty".to_string(),
+        });
+    }
+    if tag.starts_with('-') {
+        return Err(ManifestError::InvalidArg {
+            node: node.to_string(),
+            reason: format!("`tag` `{tag}` starts with `-`, would be parsed as a CLI flag"),
+        });
+    }
+    if let Some(c) = tag
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '/' | '-')))
+    {
+        return Err(ManifestError::InvalidArg {
+            node: node.to_string(),
+            reason: format!("`tag` `{tag}` contains `{c}` — allowed charset is [a-zA-Z0-9._:/-]"),
+        });
+    }
+    Ok(())
+}
+
 impl Manifest {
     /// Parse and validate a manifest from a TOML source string.
     ///
@@ -337,34 +443,58 @@ impl Manifest {
                 check_url(url, &n.id)?;
             }
             for action in &n.actions {
-                if let ActionEntry::CargoInstall {
-                    crate_name,
-                    features,
-                    ..
-                } = action
-                {
-                    if let Some(name) = crate_name {
-                        check_no_leading_dash(name, &n.id, "crate")?;
-                        if name.contains(',') {
+                match action {
+                    ActionEntry::CargoInstall {
+                        crate_name,
+                        features,
+                        ..
+                    } => {
+                        if let Some(name) = crate_name {
+                            check_no_leading_dash(name, &n.id, "crate")?;
+                            if name.contains(',') {
+                                return Err(ManifestError::InvalidArg {
+                                    node: n.id.clone(),
+                                    reason: format!(
+                                        "`crate` name `{name}` contains `,` which would split cargo's --features list"
+                                    ),
+                                });
+                            }
+                        }
+                        for feature in features {
+                            check_no_leading_dash(feature, &n.id, "features entry")?;
+                            if feature.contains(',') {
+                                return Err(ManifestError::InvalidArg {
+                                    node: n.id.clone(),
+                                    reason: format!(
+                                        "feature `{feature}` contains `,` which would split cargo's --features list"
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    ActionEntry::Docker {
+                        tag,
+                        dockerfile,
+                        context,
+                    } => {
+                        check_docker_tag(tag, &n.id)?;
+                        if let Some(df) = dockerfile {
+                            check_docker_path_safe(df, &n.id, "dockerfile")?;
+                        }
+                        if let Some(ctx) = context {
+                            check_docker_path_safe(ctx, &n.id, "context")?;
+                        }
+                        // A docker build needs a checkout to build from.
+                        if n.path.is_none() {
                             return Err(ManifestError::InvalidArg {
                                 node: n.id.clone(),
-                                reason: format!(
-                                    "`crate` name `{name}` contains `,` which would split cargo's --features list"
-                                ),
+                                reason:
+                                    "docker action requires `path` on the node (build context base)"
+                                        .to_string(),
                             });
                         }
                     }
-                    for feature in features {
-                        check_no_leading_dash(feature, &n.id, "features entry")?;
-                        if feature.contains(',') {
-                            return Err(ManifestError::InvalidArg {
-                                node: n.id.clone(),
-                                reason: format!(
-                                    "feature `{feature}` contains `,` which would split cargo's --features list"
-                                ),
-                            });
-                        }
-                    }
+                    ActionEntry::GitClone => {}
                 }
             }
         }
@@ -400,5 +530,6 @@ pub fn action_kind(a: &ActionEntry) -> &'static str {
     match a {
         ActionEntry::GitClone => "git-clone",
         ActionEntry::CargoInstall { .. } => "cargo-install",
+        ActionEntry::Docker { .. } => "docker",
     }
 }

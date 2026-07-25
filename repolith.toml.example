@@ -61,6 +61,22 @@ path = "../tools/ops-cli"
   crate = "ops"
   install_to = "~/.local/bin"
 
+# Containerized service — clone, then `docker build` an image from the
+# checkout. Build-only: repolith never runs containers.
+[[node]]
+id = "api-server"
+git = "https://github.com/example-org/api-server"
+path = "../services/api-server"
+
+  [[node.action]]
+  kind = "git-clone"
+
+  [[node.action]]
+  kind = "docker"
+  tag = "example-org/api-server:latest"  # required
+  dockerfile = "Dockerfile"              # default: Dockerfile (relative to context)
+  context = "."                          # default: the node's `path`
+
 # `[[attached]]` blocks are recognized by the parser for forward
 # compatibility but currently do nothing — they ship with the M2
 # `template_apply` action.

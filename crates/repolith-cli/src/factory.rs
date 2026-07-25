@@ -10,6 +10,7 @@
 
 use anyhow::{Context, Result, bail};
 use repolith_actions::cargo_install::{CargoInstall, CargoSource};
+use repolith_actions::docker::DockerBuild;
 use repolith_actions::git_clone::GitClone;
 use repolith_actions::paths::expand_tilde;
 use repolith_core::action::Action;
@@ -90,6 +91,29 @@ pub fn build_actions_from_manifest(manifest: &Manifest) -> Result<Vec<Box<dyn Ac
                         install_to: install_to
                             .as_deref()
                             .map_or_else(default_install_to, expand_tilde),
+                        deps,
+                    })
+                }
+                ActionEntry::Docker {
+                    tag,
+                    dockerfile,
+                    context,
+                } => {
+                    // The manifest validator already guarantees `path` is
+                    // present on nodes carrying a docker action; bail here
+                    // too so a manually-constructed Manifest can't bypass it.
+                    let node_path = node.path.as_deref().map(expand_tilde).with_context(|| {
+                        format!(
+                            "node `{}`: docker action requires `path` on the node (build context base)",
+                            node.id
+                        )
+                    })?;
+                    Box::new(DockerBuild {
+                        id: id.clone(),
+                        tag: tag.clone(),
+                        dockerfile: dockerfile.clone(),
+                        context: context.clone(),
+                        node_path,
                         deps,
                     })
                 }

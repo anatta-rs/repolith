@@ -15,7 +15,7 @@
 </div>
 
 `repolith` reads one `repolith.toml` describing remote repositories and the
-actions to run against them — `git clone`, `cargo install`, more in M2 — then
+actions to run against them — `git clone`, `cargo install`, `docker build` — then
 executes the plan in **parallel layers**, with **content-addressed caching**
 so untouched work never re-runs and a shared **`CancellationToken`** so
 `Ctrl-C` cleanly aborts every in-flight subprocess.
@@ -182,6 +182,23 @@ features = ["postgres", "tls"] # default: none
 install_to = "~/.local/bin"    # default: ~/.repolith/bin (`~` expands at run time)
 ```
 
+**`kind = "docker"`** — `docker build` an image from the node's checkout
+(build-only: running containers stays out of scope, see
+[What it is NOT](#what-it-is-not)). Requires `path` on the node; `tag` is
+the only required field:
+
+```toml
+[[node.action]]
+kind = "docker"
+tag = "my-org/app:latest"      # required — docker reference charset only
+dockerfile = "build/Dockerfile" # default: Dockerfile (relative to context)
+context = "build"              # default: the node's `path`
+```
+
+`dockerfile` and `context` must stay inside the node's checkout: relative
+paths only, no `..`, validated at parse time and re-checked after symlink
+resolution at build time.
+
 Actions on the same node run **in declaration order**; independent nodes run
 **in parallel**. More kinds land in M2 (see [Roadmap](#roadmap)).
 
@@ -196,7 +213,7 @@ Actions on the same node run **in declaration order**; independent nodes run
 | [`repolith-core`](https://crates.io/crates/repolith-core) | Types, traits (`Action`, `Cache`), manifest parser, layered `Plan`. |
 | [`repolith-cache`](https://crates.io/crates/repolith-cache) | `SqliteCache` (rusqlite, bundled, WAL). |
 | [`repolith-engine`](https://crates.io/crates/repolith-engine) | Async `Orchestrator` with cancellation + semaphore. |
-| [`repolith-actions`](https://crates.io/crates/repolith-actions) | `GitClone` (feature `git`), `CargoInstall` (feature `cargo`). |
+| [`repolith-actions`](https://crates.io/crates/repolith-actions) | `GitClone` (feature `git`), `CargoInstall` (feature `cargo`), `DockerBuild` (feature `docker`). |
 | [`repolith-cli`](https://crates.io/crates/repolith-cli) | `repolith sync / status` — the binary you run. |
 
 ## Status
@@ -215,7 +232,7 @@ publishes, tags, and cuts the GitHub Release.
 ### Roadmap
 
 - **M2** — federation `kind = "repolith"` (orchestrator-of-orchestrators),
-  Neo4j cache backend, `docker` action.
+  Neo4j cache backend. (`docker` action: ✅ shipped.)
 - **M3** — watch mode (re-plan on file change), `template_apply` action
   driving `AttachedEntry::Outbound`.
 
