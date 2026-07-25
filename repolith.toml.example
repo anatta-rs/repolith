@@ -43,8 +43,9 @@ path = "../tools/migration-tool"
 
   [[node.action]]
   kind = "cargo-install"
-  crate = "migrate"
-  install_to = "~/.local/bin"
+  crate = "migrate"                 # defaults to the node's `id` when absent
+  features = ["postgres"]           # cargo features to enable (default: none)
+  install_to = "~/.local/bin"       # defaults to ~/.repolith/bin when absent
 
 # Same shape: clone + install another binary.
 [[node]]

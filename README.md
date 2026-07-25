@@ -9,7 +9,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/anatta-rs/repolith/ci.yml?branch=main&label=CI&logo=github)](https://github.com/anatta-rs/repolith/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-v0.0.4-success)](CHANGELOG.md)
+[![crates.io](https://img.shields.io/crates/v/repolith-cli?logo=rust&label=crates.io)](https://crates.io/crates/repolith-cli)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 </div>
@@ -116,24 +116,23 @@ The negative scope is **fixed** and will not evolve:
 ## Quick start
 
 ```bash
-# 1. Clone repolith
-git clone https://github.com/anatta-rs/repolith && cd repolith
+# 1. Install the binary from crates.io
+cargo install repolith-cli
 
-# 2. Build the binary
-cargo build --release
-cp target/release/repolith ~/.local/bin/   # or any dir on $PATH
-
-# 3. Drop the example into your stack root, then edit it
-mkdir -p ../my-stack && cd ../my-stack
-cp ../repolith/repolith.toml.example ./repolith.toml
+# 2. Write a manifest in your stack root (see the reference below,
+#    or start from repolith.toml.example)
+mkdir -p ~/my-stack && cd ~/my-stack
 $EDITOR repolith.toml
 
-# 4. Preview what would happen
+# 3. Preview what would happen
 repolith sync --dry-run --explain
 
-# 5. Go
+# 4. Go
 repolith sync
 ```
+
+Building from source works too: `git clone
+https://github.com/anatta-rs/repolith && cargo build --release`.
 
 `repolith status` prints a cache hit/miss table without running anything.
 `repolith sync -k` keeps a layer running after a failure (useful for
@@ -141,6 +140,50 @@ surfacing every failure of a layer in one pass).
 
 See [`repolith.toml.example`](repolith.toml.example) for a full annotated
 manifest.
+
+## Manifest reference
+
+A manifest is one `[orchestrator]` block plus any number of `[[node]]`
+blocks; each node carries the actions to run against it, in order.
+
+### `[orchestrator]`
+
+| Field | Required | Description |
+|---|---|---|
+| `schema_version` | yes | Manifest schema. Current requirement: `~0.1` (e.g. `"0.1"`). |
+| `name` | yes | Human-readable stack name, shown in logs. |
+
+### `[[node]]`
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | yes | Unique node id. Also the default crate name for `cargo-install`, and the prefix of every action id (`{id}::{kind}::{index}`). |
+| `git` | per action | Source URL (`https://`, `ssh://`, or `git@host:path`). **Source** for `git-clone`. |
+| `path` | per action | Local checkout directory, relative to the manifest. **Destination** for `git-clone`, **source tree** for `cargo-install`. |
+
+### Action kinds
+
+**`kind = "git-clone"`** — fetch the node's source into `path`. No fields of
+its own:
+
+```toml
+[[node.action]]
+kind = "git-clone"
+```
+
+**`kind = "cargo-install"`** — `cargo install` from the node's source tree.
+All three fields are optional:
+
+```toml
+[[node.action]]
+kind = "cargo-install"
+crate = "migrate"              # default: the node's `id`
+features = ["postgres", "tls"] # default: none
+install_to = "~/.local/bin"    # default: ~/.repolith/bin (`~` expands at run time)
+```
+
+Actions on the same node run **in declaration order**; independent nodes run
+**in parallel**. More kinds land in M2 (see [Roadmap](#roadmap)).
 
 ## Architecture
 
@@ -150,11 +193,11 @@ manifest.
 
 | Crate | Purpose |
 |---|---|
-| [`repolith-core`](crates/repolith-core) | Types, traits (`Action`, `Cache`), manifest parser, layered `Plan`. |
-| [`repolith-cache`](crates/repolith-cache) | `SqliteCache` (rusqlite, bundled, WAL). |
-| [`repolith-engine`](crates/repolith-engine) | Async `Orchestrator` with cancellation + semaphore. |
-| [`repolith-actions`](crates/repolith-actions) | `GitClone` (feature `git`), `CargoInstall` (feature `cargo`). |
-| [`repolith-cli`](crates/repolith-cli) | `repolith sync / status` — the binary you run. |
+| [`repolith-core`](https://crates.io/crates/repolith-core) | Types, traits (`Action`, `Cache`), manifest parser, layered `Plan`. |
+| [`repolith-cache`](https://crates.io/crates/repolith-cache) | `SqliteCache` (rusqlite, bundled, WAL). |
+| [`repolith-engine`](https://crates.io/crates/repolith-engine) | Async `Orchestrator` with cancellation + semaphore. |
+| [`repolith-actions`](https://crates.io/crates/repolith-actions) | `GitClone` (feature `git`), `CargoInstall` (feature `cargo`). |
+| [`repolith-cli`](https://crates.io/crates/repolith-cli) | `repolith sync / status` — the binary you run. |
 
 ## Status
 
@@ -164,14 +207,10 @@ process-group cancel propagation, node-id path-traversal validator. Full
 test suite under `cargo test --workspace --all-features` (80+ tests at last
 count). See [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown
 (three pre-public audit cycles between v0.0.1 and v0.0.4 closed every
-must-fix item surfaced).
-
-> **CI status.** GitHub Actions runs are temporarily paused while the
-> upstream Actions billing is being sorted out — the workflow in
-> [`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the canonical gate
-> (`cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-> `cargo test --workspace --all-features`, `cargo doc` with `RUSTDOCFLAGS=-D warnings`).
-> Run it locally before opening a PR.
+must-fix item surfaced). All 5 crates are published on
+[crates.io](https://crates.io/crates/repolith-cli); releases are automated
+with [release-plz](https://release-plz.dev) — merging the release PR
+publishes, tags, and cuts the GitHub Release.
 
 ### Roadmap
 
