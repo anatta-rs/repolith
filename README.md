@@ -254,13 +254,15 @@ one server without id collisions.
 
 ## Status
 
-**v0.0.4 shipped.** 5 crates, 2 builtin actions, parallel layered execution
-with cancellation, SQLite cache (WAL), URL-injection hardening,
-process-group cancel propagation, node-id path-traversal validator. Full
-test suite under `cargo test --workspace --all-features` (80+ tests at last
-count). See [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown
-(three pre-public audit cycles between v0.0.1 and v0.0.4 closed every
-must-fix item surfaced). All 5 crates are published on
+**M2 complete.** 5 crates, 4 action kinds (`git-clone`, `cargo-install`,
+`docker`, `repolith` federation), 2 cache backends (`SQLite` default,
+Neo4j opt-in with a live-server contract suite in CI), parallel layered
+execution with tree-wide cancellation, URL-injection + path-traversal
+hardening. Full test suite under
+`cargo test --workspace --all-features` (110+ tests at last count). The
+crates.io badge above always shows the current published version; see
+[`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown. All 5
+crates are published on
 [crates.io](https://crates.io/crates/repolith-cli); releases are automated
 with [release-plz](https://release-plz.dev) — merging the release PR
 publishes, tags, and cuts the GitHub Release.
