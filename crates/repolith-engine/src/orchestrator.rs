@@ -32,6 +32,11 @@ pub struct Orchestrator {
     /// Optional manifest snapshot — kept for downstream consumers (CLI, telemetry).
     pub manifest: Option<Manifest>,
     max_parallelism: usize,
+    /// Externally-provided concurrency pool. When set (federation), this
+    /// orchestrator draws permits from the shared pool instead of creating
+    /// its own — `--jobs N` stays a **global** bound across the whole
+    /// federation tree, never N per level.
+    shared_semaphore: Option<Arc<Semaphore>>,
     base_ctx: Ctx,
 }
 
@@ -68,6 +73,7 @@ pub struct Builder {
     cache: Option<Box<dyn Cache>>,
     manifest: Option<Manifest>,
     max_parallelism: usize,
+    shared_semaphore: Option<Arc<Semaphore>>,
     base_ctx: Ctx,
 }
 
@@ -90,6 +96,7 @@ impl Orchestrator {
             cache: None,
             manifest: None,
             max_parallelism: num_cpus::get().max(1),
+            shared_semaphore: None,
             base_ctx: Ctx {
                 cancel: CancellationToken::new(),
                 workdir: std::env::current_dir().unwrap_or_default(),
@@ -122,7 +129,10 @@ impl Orchestrator {
         plan: &Plan,
         mode: ExecMode,
     ) -> Result<Vec<BuildEvent>, ExecError> {
-        let sem = Arc::new(Semaphore::new(self.max_parallelism));
+        let sem = self
+            .shared_semaphore
+            .clone()
+            .unwrap_or_else(|| Arc::new(Semaphore::new(self.max_parallelism)));
         let mut all_events: Vec<BuildEvent> = Vec::new();
 
         for layer in plan.layers() {
@@ -199,9 +209,19 @@ impl Orchestrator {
                 let input_hash = plan
                     .input_hash(&id)
                     .expect("stale id must have been planned with an input_hash");
+                let coordinator = action.is_coordinator();
                 async move {
-                    // Acquire concurrency permit — yields when the layer is wider than the limit.
-                    let _permit = sem.acquire().await.expect("semaphore never closed");
+                    // Acquire concurrency permit — yields when the layer is
+                    // wider than the limit. Coordinators (federation) are
+                    // exempt: their children draw from the same shared pool,
+                    // so charging the coordinator too would deadlock at
+                    // --jobs 1 (it would hold the only permit while its
+                    // children wait for it).
+                    let _permit = if coordinator {
+                        None
+                    } else {
+                        Some(sem.acquire().await.expect("semaphore never closed"))
+                    };
                     let started = Instant::now();
                     let result = action.execute(&layer_ctx).await;
                     (id, started.elapsed(), input_hash, result)
@@ -247,6 +267,14 @@ impl Builder {
         self
     }
 
+    /// Set an already-boxed cache backend. Useful when the concrete type
+    /// is only known at runtime (federation hooks return `Box<dyn Cache>`).
+    #[must_use]
+    pub fn cache_boxed(mut self, c: Box<dyn Cache>) -> Self {
+        self.cache = Some(c);
+        self
+    }
+
     /// Attach the parsed manifest snapshot (optional, for downstream consumers).
     #[must_use]
     pub fn manifest(mut self, m: Manifest) -> Self {
@@ -258,6 +286,16 @@ impl Builder {
     #[must_use]
     pub fn max_parallelism(mut self, n: usize) -> Self {
         self.max_parallelism = n.max(1);
+        self
+    }
+
+    /// Draw concurrency permits from an externally-owned pool instead of a
+    /// private one. Used by federation so `--jobs N` bounds the **whole
+    /// tree** of orchestrators, not N per level. Overrides
+    /// [`Self::max_parallelism`] when set.
+    #[must_use]
+    pub fn shared_semaphore(mut self, sem: Arc<Semaphore>) -> Self {
+        self.shared_semaphore = Some(sem);
         self
     }
 
@@ -294,6 +332,7 @@ impl Builder {
             cache,
             manifest: self.manifest,
             max_parallelism: self.max_parallelism,
+            shared_semaphore: self.shared_semaphore,
             base_ctx: self.base_ctx,
         })
     }

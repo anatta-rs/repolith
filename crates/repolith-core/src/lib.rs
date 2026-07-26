@@ -49,3 +49,7 @@ pub mod plan;
 
 /// Manifest schema and parser (`repolith.toml`).
 pub mod manifest;
+
+/// Run-time path containment (`contain_within`) — shared by actions that
+/// resolve user-supplied relative paths (docker, federation).
+pub mod paths;

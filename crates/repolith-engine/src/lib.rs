@@ -6,3 +6,7 @@
 
 /// Orchestrator + builder + execution errors.
 pub mod orchestrator;
+
+/// Federation — `kind = "repolith"` executes a child stack's manifest as a
+/// nested plan (orchestrator-of-orchestrators).
+pub mod federation;

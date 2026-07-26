@@ -22,6 +22,18 @@ pub trait Action: Send + Sync {
 
     /// Executes the action's core logic.
     async fn execute(&self, ctx: &Ctx) -> Result<BuildOutput, BuildError>;
+
+    /// `true` for actions that only *coordinate* other actions (federation's
+    /// `RepolithSync`) rather than doing bounded work themselves.
+    ///
+    /// The orchestrator does **not** charge a concurrency permit for
+    /// coordinators: the child actions they spawn acquire from the same
+    /// shared semaphore, so charging the coordinator too would deadlock at
+    /// `--jobs 1` (the coordinator would hold the only permit while its
+    /// children wait for it).
+    fn is_coordinator(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@
 use crate::util::{check_status, run_with_cancel};
 use async_trait::async_trait;
 use repolith_core::action::Action;
+use repolith_core::paths::contain_within;
 use repolith_core::types::{ActionId, BuildError, BuildOutput, Ctx, Sha256};
 use sha2::{Digest, Sha256 as ShaHasher};
 use std::path::{Path, PathBuf};
@@ -42,31 +43,6 @@ pub struct DockerBuild {
     pub node_path: PathBuf,
     /// IDs of actions that must complete before this one runs.
     pub deps: Vec<ActionId>,
-}
-
-/// Resolve `relative` against `base` and require the canonicalized result
-/// to stay inside canonicalized `base`.
-///
-/// This is the run-time half of the two-stage containment design: the
-/// lexical half lives in `repolith-core`'s manifest validator. Only this
-/// half can catch symlink escapes, because only it may touch the
-/// filesystem.
-pub(crate) fn contain_within(base: &Path, relative: &Path) -> Result<PathBuf, BuildError> {
-    let base_canon = base
-        .canonicalize()
-        .map_err(|e| BuildError::Io(format!("canonicalize base {}: {e}", base.display())))?;
-    let joined = base_canon.join(relative);
-    let canon = joined
-        .canonicalize()
-        .map_err(|e| BuildError::Io(format!("canonicalize {}: {e}", joined.display())))?;
-    if !canon.starts_with(&base_canon) {
-        return Err(BuildError::Io(format!(
-            "path {} escapes the node checkout {} (symlink traversal?)",
-            canon.display(),
-            base_canon.display()
-        )));
-    }
-    Ok(canon)
 }
 
 impl DockerBuild {
@@ -98,11 +74,21 @@ impl Action for DockerBuild {
     }
 
     async fn input_hash(&self, ctx: &Ctx) -> Result<Sha256, BuildError> {
-        let (context, dockerfile) = self.resolved_paths()?;
-
         let mut h = ShaHasher::new();
         h.update(b"docker:tag:");
         h.update(self.tag.as_bytes());
+
+        // Pre-clone grace: a sibling git-clone earlier in the same node may
+        // not have materialized the checkout yet at plan time. Hash a
+        // deterministic marker instead of failing the whole plan; the
+        // action is stale anyway (NoCachedBuild / UpstreamMoved cascade),
+        // runs after the clone, and the next sync re-hashes real bytes
+        // (one extra, harmless rebuild). `execute` stays strict.
+        if !self.node_path.exists() {
+            h.update(b":pre-clone");
+            return Ok(Sha256(h.finalize().into()));
+        }
+        let (context, dockerfile) = self.resolved_paths()?;
 
         // Dockerfile content — the primary build input.
         let df_bytes = tokio::fs::read(&dockerfile).await.map_err(|e| {
