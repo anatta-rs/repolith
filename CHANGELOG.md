@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.8](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.7...repolith-core-v0.0.8) - 2026-07-26
+
+### Added
+
+- *(cache)* Neo4j backend + NamespacedCache — env-only creds, contract suite (closes #62) ([#70](https://github.com/anatta-rs/repolith/pull/70))
+
+### Other
+
+- *(readme)* Status reflects M2 — 4 kinds, 2 cache backends, evergreen version wording ([#72](https://github.com/anatta-rs/repolith/pull/72))
+
 ## [0.0.7](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.6...repolith-core-v0.0.7) - 2026-07-26
 
 ### Added
