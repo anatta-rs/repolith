@@ -1,0 +1,42 @@
+# repolith orchestrating its own dev environment.
+#
+#   repolith status                    # what's stale, runs nothing
+#   repolith sync --dry-run --explain  # why it's stale
+#   repolith sync                      # do it
+#
+# Scope is this repository only. Sibling stacks in anatta-rs keep their own
+# `repolith.toml`; a parent manifest one level up can pull them all together
+# with `kind = "repolith"` nodes — that's what federation is for.
+
+[orchestrator]
+schema_version = "0.1"
+name = "repolith-dev"
+
+# repolith installs itself. `cargo install` needs a real package, and the
+# workspace root is virtual, so the node points at the CLI crate rather than
+# `.`. `crate` is the *binary* name (`[[bin]] name` in repolith-cli), which
+# differs from the package name.
+#
+# Caveat worth knowing: the staleness digest covers `crates/repolith-cli`
+# only. Editing `repolith-core` does not mark this node stale, because the
+# digest does not follow path dependencies — use `cargo install` directly, or
+# touch the CLI crate, until that gap is closed.
+[[node]]
+id = "repolith"
+path = "crates/repolith-cli"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "repolith"
+  install_to = "~/.cargo"      # → ~/.cargo/bin/repolith, already on PATH
+
+# Not yet expressible: `cargo-semver-checks`, which release-plz warns about
+# on every run. Its repository ships several packages with binaries (test
+# fixtures), and `cargo install --git` refuses to guess:
+#
+#   error: multiple packages with binaries found: bin_only, …
+#   Please specify a package, e.g. `cargo install --git <url> bin_only`
+#
+# repolith passes `--bin` but never `--package`, so there is no way to
+# disambiguate. Add the node once that gap is closed; until then:
+#   cargo install cargo-semver-checks --locked
