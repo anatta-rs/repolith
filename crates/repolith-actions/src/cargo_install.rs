@@ -6,6 +6,7 @@
 //! `FailFast` mode can short-circuit a long-running build.
 
 use crate::paths::expand_tilde;
+use crate::source_hash::{platform_tag, tree_digest};
 use crate::util::{check_status, run_with_cancel};
 use async_trait::async_trait;
 use repolith_core::action::Action;
@@ -64,6 +65,18 @@ impl CargoInstall {
                 .to_string()
         }
     }
+
+    /// Where cargo writes the binary: `<install_to>/bin/<crate><EXE_SUFFIX>`.
+    /// Single source of truth for `execute` (which reads it back to hash it)
+    /// and `output_present` (which only checks it exists).
+    fn installed_bin(&self) -> PathBuf {
+        let bin_name = format!(
+            "{}{}",
+            self.resolved_crate_name(),
+            std::env::consts::EXE_SUFFIX
+        );
+        expand_tilde(&self.install_to).join("bin").join(bin_name)
+    }
 }
 
 #[async_trait]
@@ -86,10 +99,27 @@ impl Action for CargoInstall {
                 h.update(branch.as_deref().unwrap_or("").as_bytes());
             }
             CargoSource::Path { path } => {
+                // The tree's *content*, not its name. Hashing the path
+                // string alone made every local edit invisible: the hash
+                // never moved, so `sync` reported `up to date` while the
+                // installed binary was stale (issue #73).
+                let expanded = expand_tilde(path);
                 h.update(b"path:");
-                h.update(path.to_string_lossy().as_bytes());
+                if expanded.exists() {
+                    h.update(tree_digest(&expanded)?.0);
+                } else {
+                    // Pre-clone grace: a sibling `git-clone` earlier in the
+                    // same node materializes this tree, but planning runs
+                    // before any execution. Hash a deterministic marker
+                    // rather than failing the whole plan — the action is
+                    // stale regardless, runs after the clone, and the next
+                    // sync digests the real content. Same treatment as
+                    // `docker` and federation.
+                    h.update(b"pre-clone");
+                }
             }
         }
+        platform_tag(&mut h);
         for f in &self.features {
             h.update(b":feat:");
             h.update(f.as_bytes());
@@ -156,8 +186,7 @@ impl Action for CargoInstall {
         // Windows binaries have `.exe` suffix; `EXE_SUFFIX` is `""` on Unix.
         // `tokio::fs::read` releases the async worker for the (potentially
         // multi-MB) read instead of blocking it like `std::fs::read` did.
-        let bin_name = format!("{crate_name}{}", std::env::consts::EXE_SUFFIX);
-        let bin = install_root.join("bin").join(&bin_name);
+        let bin = self.installed_bin();
         let bytes = tokio::fs::read(&bin)
             .await
             .map_err(|e| BuildError::Io(format!("read installed binary {}: {e}", bin.display())))?;
@@ -167,5 +196,11 @@ impl Action for CargoInstall {
             output_hash: Sha256(h.finalize().into()),
             stdout: format!("installed -> {}", bin.display()),
         })
+    }
+
+    /// The installed binary must still be on this machine. A cached
+    /// `Success` alone proves only that *some* machine built it.
+    async fn output_present(&self, _ctx: &Ctx) -> bool {
+        self.installed_bin().is_file()
     }
 }

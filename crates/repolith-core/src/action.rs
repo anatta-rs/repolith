@@ -34,6 +34,26 @@ pub trait Action: Send + Sync {
     fn is_coordinator(&self) -> bool {
         false
     }
+
+    /// Whether the artifact this action produces is still present.
+    ///
+    /// A cached `Success` only means "these inputs were built **somewhere,
+    /// once**" — not that the result is still on *this* machine. Without
+    /// this probe the planner trusts the cache blindly and reports
+    /// `up to date` when the binary was deleted, or when the cache entry
+    /// was written by a different machine sharing a backend (see the
+    /// Neo4j backend). Actions that leave a persistent artifact should
+    /// override this; the default `true` suits actions with nothing to
+    /// check (coordinators, pure side effects).
+    ///
+    /// Implementations must be **cheap** — this runs for every action on
+    /// every plan. A `stat` or a single subprocess, nothing more. On any
+    /// doubt return `true`: a false negative causes a needless rebuild,
+    /// while a false positive resurrects the silent-staleness bug.
+    async fn output_present(&self, ctx: &Ctx) -> bool {
+        let _ = ctx;
+        true
+    }
 }
 
 #[cfg(test)]
