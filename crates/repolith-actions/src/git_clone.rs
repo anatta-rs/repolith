@@ -119,6 +119,13 @@ impl Action for GitClone {
             stdout: format!("HEAD {sha1}"),
         })
     }
+
+    /// The checkout must still be a git worktree on this machine. Catches
+    /// a hand-deleted directory, and the shared-cache case where another
+    /// machine recorded the clone.
+    async fn output_present(&self, _ctx: &Ctx) -> bool {
+        self.path.join(".git").exists()
+    }
 }
 
 /// Hash a `(url, sha1-hex)` pair into a `Sha256` for use as `input_hash`.

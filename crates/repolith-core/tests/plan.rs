@@ -50,6 +50,8 @@ struct StubAction {
     id: ActionId,
     deps: Vec<ActionId>,
     hash: Sha256,
+    /// What `output_present` reports. `true` matches the trait default.
+    present: bool,
 }
 
 impl StubAction {
@@ -58,7 +60,15 @@ impl StubAction {
             id: ActionId(name.to_string()),
             deps: deps.iter().map(|d| ActionId((*d).to_string())).collect(),
             hash: Sha256([hash_byte; 32]),
+            present: true,
         }
+    }
+
+    /// Simulate an artifact that is gone from this machine — deleted by
+    /// hand, or never built here because a peer wrote the cache entry.
+    fn without_artifact(mut self) -> Self {
+        self.present = false;
+        self
     }
 }
 
@@ -81,6 +91,10 @@ impl Action for StubAction {
             output_hash: self.hash,
             stdout: String::new(),
         })
+    }
+
+    async fn output_present(&self, _ctx: &Ctx) -> bool {
+        self.present
     }
 }
 
@@ -316,4 +330,86 @@ async fn test_cancel_during_layer_fanout_short_circuits() {
         Err(PlanError::Build(BuildError::Cancelled)) => (),
         other => panic!("expected Build(Cancelled), got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// OutputMissing — a cached Success is not proof the artifact is still here
+// (issue #73)
+// ---------------------------------------------------------------------------
+
+/// The shared-cache regression: machine A records a Success, machine B has
+/// the same manifest and the same (shared) cache but no artifact. Before
+/// this, B reported `0 stale actions` and installed nothing at all.
+#[tokio::test]
+async fn artifact_missing_is_stale_even_when_the_hash_matches() {
+    let action = StubAction::new("a", &[], 1).without_artifact();
+    let hash = Sha256([1; 32]);
+    let cache = MockCache::new().with_event(BuildEvent::Success {
+        id: aid("a"),
+        input: hash,
+        output: hash,
+        ms: 1,
+    });
+
+    let plan = Plan::compute(&boxed(vec![action]), &cache, &ctx())
+        .await
+        .expect("plan");
+
+    assert_eq!(
+        plan.reasons().get(&aid("a")),
+        Some(&ChangeReason::OutputMissing),
+        "a cached Success with no artifact on this machine must be stale"
+    );
+}
+
+/// Same inputs, artifact present: still a no-op. Guards against the fix
+/// turning every sync into a rebuild.
+#[tokio::test]
+async fn artifact_present_with_matching_hash_stays_up_to_date() {
+    let hash = Sha256([1; 32]);
+    let cache = MockCache::new().with_event(BuildEvent::Success {
+        id: aid("a"),
+        input: hash,
+        output: hash,
+        ms: 1,
+    });
+
+    let plan = Plan::compute(&boxed(vec![StubAction::new("a", &[], 1)]), &cache, &ctx())
+        .await
+        .expect("plan");
+
+    assert!(
+        plan.reasons().is_empty(),
+        "unchanged inputs + present artifact must stay up to date, got {:?}",
+        plan.reasons()
+    );
+}
+
+/// A changed hash still wins over the presence probe — the reason must
+/// stay the more informative `InputHashChanged`.
+#[tokio::test]
+async fn changed_hash_outranks_missing_artifact() {
+    let cache = MockCache::new().with_event(BuildEvent::Success {
+        id: aid("a"),
+        input: Sha256([9; 32]),
+        output: Sha256([9; 32]),
+        ms: 1,
+    });
+
+    let plan = Plan::compute(
+        &boxed(vec![StubAction::new("a", &[], 1).without_artifact()]),
+        &cache,
+        &ctx(),
+    )
+    .await
+    .expect("plan");
+
+    assert!(
+        matches!(
+            plan.reasons().get(&aid("a")),
+            Some(ChangeReason::InputHashChanged { .. })
+        ),
+        "got {:?}",
+        plan.reasons().get(&aid("a"))
+    );
 }

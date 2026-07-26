@@ -49,6 +49,11 @@ pub enum ChangeReason {
         /// First stale dependency encountered (deterministic via deps order).
         dep: ActionId,
     },
+    /// Inputs are unchanged and the cache holds a `Success`, but the
+    /// artifact it describes is gone from this machine — deleted by hand,
+    /// or never here in the first place because another machine wrote the
+    /// entry into a shared cache backend.
+    OutputMissing,
 }
 
 /// Errors raised while computing a [`Plan`].
@@ -165,8 +170,8 @@ impl Plan {
         //    `max(latency)`. The cascade pass that uses the results is
         //    sequential because layer N reads `stale` populated by layer
         //    N-1.
-        let by_id: HashMap<ActionId, &Box<dyn Action>> =
-            actions.iter().map(|a| (a.id(), a)).collect();
+        let by_id: HashMap<ActionId, &dyn Action> =
+            actions.iter().map(|a| (a.id(), a.as_ref())).collect();
         let mut reasons: HashMap<ActionId, ChangeReason> = HashMap::new();
         let mut stale: HashSet<ActionId> = HashSet::new();
         let mut input_hashes: HashMap<ActionId, Sha256> = HashMap::new();
@@ -179,44 +184,11 @@ impl Plan {
             if ctx.cancel.is_cancelled() {
                 return Err(PlanError::Build(BuildError::Cancelled));
             }
-            // Spawn all per-action probes concurrently. Pre-materialize
-            // (id, action) and (id, ()) tuples so each future owns its own
-            // pieces — the alternative (capturing `by_id` / `cache` in the
-            // closure) hits the FnMut "moved value" borrow checker because
-            // `.map()` reuses the closure across iterations.
-            let action_probes: Vec<(ActionId, &dyn Action)> = layer
-                .iter()
-                .map(|id| (id.clone(), by_id[id].as_ref()))
-                .collect();
-            // Inner cancel: race each probe future against `ctx.cancel`. The
-            // outer layer-edge check above only catches cancel *between*
-            // layers; this catches it *during* a layer's fan-out (e.g. when
-            // 50 nodes are mid-`git ls-remote` and Ctrl-C is pressed).
-            let hash_results: Vec<(ActionId, Result<Sha256, BuildError>)> =
-                join_all(action_probes.into_iter().map(|(id, action)| async move {
-                    let probe = pin!(action.input_hash(ctx));
-                    let cancel = pin!(ctx.cancel.cancelled());
-                    let result = match select(probe, cancel).await {
-                        Either::Left((r, _)) => r,
-                        Either::Right(((), _)) => Err(BuildError::Cancelled),
-                    };
-                    (id, result)
-                }))
-                .await;
-            let cached: Vec<(ActionId, Option<BuildEvent>)> = join_all(layer.iter().map(|id| {
-                let id = id.clone();
-                async move { (id.clone(), cache.last_build(&id).await) }
-            }))
-            .await;
-
-            // Materialize results into maps so we can match them up by id
-            // in the deterministic cascade pass below.
-            let mut hashes_now: HashMap<ActionId, Sha256> = HashMap::new();
-            for (id, result) in hash_results {
-                let now = result?;
-                hashes_now.insert(id, now);
-            }
-            let cached_map: HashMap<ActionId, Option<BuildEvent>> = cached.into_iter().collect();
+            let LayerProbes {
+                hashes_now,
+                cached_map,
+                presence_map,
+            } = probe_layer(layer, &by_id, cache, ctx).await?;
 
             // Sequential cascade — order matters because `UpstreamMoved`
             // depends on the `stale` set populated by earlier ids.
@@ -224,7 +196,8 @@ impl Plan {
                 let now = hashes_now[id];
                 input_hashes.insert(id.clone(), now);
                 let last = cached_map.get(id).and_then(Option::as_ref);
-                if let Some(reason) = classify(id, by_id[id].as_ref(), now, last, &stale) {
+                let present = presence_map.get(id).copied().unwrap_or(true);
+                if let Some(reason) = classify(id, by_id[id], now, last, &stale, present) {
                     reasons.insert(id.clone(), reason);
                     stale.insert(id.clone());
                 }
@@ -246,6 +219,74 @@ impl Plan {
     }
 }
 
+/// Everything one layer's concurrent probes produced, keyed by action id.
+struct LayerProbes {
+    hashes_now: HashMap<ActionId, Sha256>,
+    cached_map: HashMap<ActionId, Option<BuildEvent>>,
+    presence_map: HashMap<ActionId, bool>,
+}
+
+/// Run all three per-action probes for one layer concurrently.
+///
+/// The probes are independent and may shell out (`git ls-remote`,
+/// `cargo --version`, `docker image inspect`), so fanning them out turns
+/// wall-clock from `sum(latency)` into `max(latency)`. Extracted from
+/// [`Plan::compute`] to keep that function under the workspace's
+/// `clippy::too_many_lines` threshold.
+async fn probe_layer(
+    layer: &[ActionId],
+    by_id: &HashMap<ActionId, &dyn Action>,
+    cache: &dyn Cache,
+    ctx: &Ctx,
+) -> std::result::Result<LayerProbes, PlanError> {
+    // Pre-materialize (id, action) tuples so each future owns its own
+    // pieces — capturing `by_id` in the closure hits the FnMut "moved
+    // value" borrow checker because `.map()` reuses it across iterations.
+    let hash_probes: Vec<(ActionId, &dyn Action)> =
+        layer.iter().map(|id| (id.clone(), by_id[id])).collect();
+    // Inner cancel: race each probe against `ctx.cancel`. The layer-edge
+    // check in `compute` only catches cancel *between* layers; this
+    // catches it *during* a fan-out (50 nodes mid-`git ls-remote`, Ctrl-C).
+    let hash_results: Vec<(ActionId, Result<Sha256, BuildError>)> =
+        join_all(hash_probes.into_iter().map(|(id, action)| async move {
+            let probe = pin!(action.input_hash(ctx));
+            let cancel = pin!(ctx.cancel.cancelled());
+            let result = match select(probe, cancel).await {
+                Either::Left((r, _)) => r,
+                Either::Right(((), _)) => Err(BuildError::Cancelled),
+            };
+            (id, result)
+        }))
+        .await;
+
+    // Is the artifact still on this machine? Cheap by contract (a stat, at
+    // most one subprocess), so it rides along in the same fan-out for free.
+    let presence_probes: Vec<(ActionId, &dyn Action)> =
+        layer.iter().map(|id| (id.clone(), by_id[id])).collect();
+    let presence: Vec<(ActionId, bool)> = join_all(
+        presence_probes
+            .into_iter()
+            .map(|(id, action)| async move { (id, action.output_present(ctx).await) }),
+    )
+    .await;
+
+    let cached: Vec<(ActionId, Option<BuildEvent>)> = join_all(layer.iter().map(|id| {
+        let id = id.clone();
+        async move { (id.clone(), cache.last_build(&id).await) }
+    }))
+    .await;
+
+    let mut hashes_now: HashMap<ActionId, Sha256> = HashMap::new();
+    for (id, result) in hash_results {
+        hashes_now.insert(id, result?);
+    }
+    Ok(LayerProbes {
+        hashes_now,
+        cached_map: cached.into_iter().collect(),
+        presence_map: presence.into_iter().collect(),
+    })
+}
+
 /// Decide whether `id` is stale, given its freshly-computed input hash,
 /// its last cached build event, and the set of already-stale ids in
 /// earlier positions of the same layer (or earlier layers).
@@ -259,6 +300,7 @@ fn classify(
     now: Sha256,
     last: Option<&BuildEvent>,
     stale: &HashSet<ActionId>,
+    output_present: bool,
 ) -> Option<ChangeReason> {
     let _ = id; // referenced only for trace context in future revisions
     // Both `None` and a prior `Failed` collapse to `NoCachedBuild`:
@@ -275,6 +317,10 @@ fn classify(
                 to: now,
             })
         }
+        // Inputs match, so the cache *claims* this is done. Only trust it
+        // if the artifact is actually here — the entry may have been
+        // written by another machine through a shared cache backend.
+        BuildEvent::Success { .. } if !output_present => Some(ChangeReason::OutputMissing),
         BuildEvent::Success { .. } => action
             .deps()
             .into_iter()

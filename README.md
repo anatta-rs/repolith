@@ -75,9 +75,13 @@ $ repolith sync
 up to date — 0 stale actions
 ```
 
-The second `sync` is a **no-op** — the SQLite cache holds last-run input
-hashes per action, so nothing re-runs unless an upstream HEAD or a cargo
-feature actually changed.
+The second `sync` is a **no-op** — the cache holds last-run input hashes
+per action, so nothing re-runs unless something actually changed. What
+counts as "changed": the upstream HEAD, the **content** of a local
+`path` source (edits are seen even uncommitted), a cargo feature, the
+toolchain, the build platform — or the artifact going missing from this
+machine. That last one matters with a shared cache backend: another
+machine having built something is not a reason to skip building it here.
 
 ## Why use it
 
@@ -91,9 +95,13 @@ feature actually changed.
   peers; `--keep-going` lets the layer settle then halts. On Unix the
   subprocess process group is signalled (SIGTERM → grace → SIGKILL) so
   cargo's `rustc` / linker grandchildren get reaped too.
-- **Cache-first.** Every successful build writes a `BuildEvent` to a SQLite
-  store (WAL) keyed by content-addressed input hashes. Re-runs are
-  near-instant when nothing changed.
+- **Cache-first, and honest about it.** Every successful build writes a
+  `BuildEvent` keyed by a content-addressed input hash — for local `path`
+  sources that means the tree's actual bytes (`.gitignore`-aware, `target/`
+  excluded, mtimes ignored so a fresh clone doesn't look stale). Before
+  trusting a cache hit the planner also checks the artifact is still here.
+  Re-runs are near-instant when nothing changed, and never skipped when
+  something did.
 - **Hardened argv.** URLs validated against a scheme allowlist with
   nested-userinfo / host / path-segment leading-dash checks; `--` argv
   separator before every user URL as defense in depth; crate names + feature

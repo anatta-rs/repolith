@@ -26,6 +26,11 @@
 #[cfg(any(feature = "git", feature = "cargo", feature = "docker"))]
 pub(crate) mod util;
 
+/// Shared input-hash ingredients: build platform + source-tree content
+/// digest. Used by every action whose inputs include a local tree.
+#[cfg(any(feature = "cargo", feature = "docker"))]
+pub mod source_hash;
+
 /// Path utilities (tilde expansion). Public so the manifest factory in the
 /// CLI can apply the same expansion to `node.path` that `cargo_install`
 /// already applies to `install_to`.

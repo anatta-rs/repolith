@@ -15,6 +15,7 @@
 //! resolved paths are canonicalized and must remain inside the node's
 //! canonicalized checkout, or the build fails before `docker` is spawned.
 
+use crate::source_hash::{platform_tag, tree_digest};
 use crate::util::{check_status, run_with_cancel};
 use async_trait::async_trait;
 use repolith_core::action::Action;
@@ -97,19 +98,22 @@ impl Action for DockerBuild {
         h.update(b":dockerfile:");
         h.update(&df_bytes);
 
-        // Checkout state: HEAD when the context is a git worktree, a fixed
-        // marker otherwise (path-only nodes). A non-git context therefore
-        // re-runs only when the Dockerfile, tag, or docker version changes —
-        // documented trade-off, same family as cargo-install's source hash.
+        // Build-context state. HEAD alone was not enough: it misses
+        // uncommitted edits, and says nothing at all for a non-git context
+        // (issue #73 — the marker used to be a constant `no-git`, so those
+        // contexts never looked stale). Hash the context's content, which
+        // subsumes both cases; HEAD stays in the digest as a cheap, human
+        // -readable discriminator when the context *is* a worktree.
         let mut head = Command::new("git");
         head.args(["-C"]).arg(&context).args(["rev-parse", "HEAD"]);
         let head_out = run_with_cancel(head, &ctx.cancel).await?;
         h.update(b":checkout:");
         if head_out.status.success() {
             h.update(&head_out.stdout);
-        } else {
-            h.update(b"no-git");
         }
+        h.update(b":tree:");
+        h.update(tree_digest(&context)?.0);
+        platform_tag(&mut h);
 
         // Mix in `docker --version` so an engine bump invalidates the cache.
         // Its absence is a hard, actionable error — not a silent cache hit.
@@ -175,6 +179,18 @@ impl Action for DockerBuild {
             output_hash: Sha256(h.finalize().into()),
             stdout: format!("built {} -> {image_id}", self.tag),
         })
+    }
+
+    /// The tagged image must still exist in this host's daemon — a cached
+    /// `Success` may have been recorded on another machine, or the image
+    /// may have been pruned since.
+    async fn output_present(&self, ctx: &Ctx) -> bool {
+        let mut inspect = Command::new("docker");
+        inspect.args(["image", "inspect", "--format", "{{.Id}}", "--", &self.tag]);
+        // Any error (daemon down, docker absent) yields `true`: a false
+        // "missing" would force a rebuild that is about to fail anyway
+        // with a much clearer message from `execute`.
+        (run_with_cancel(inspect, &ctx.cancel).await).map_or(true, |out| out.status.success())
     }
 }
 
