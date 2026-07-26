@@ -180,15 +180,32 @@ kind = "git-clone"
 ```
 
 **`kind = "cargo-install"`** — `cargo install` from the node's source tree.
-All three fields are optional:
+Every field is optional:
 
 ```toml
 [[node.action]]
 kind = "cargo-install"
-crate = "migrate"              # default: the node's `id`
+crate = "migrate"              # default: the node's `id` — the BINARY name
+package = "migration-tools"    # default: none — see below
 features = ["postgres", "tls"] # default: none
 install_to = "~/.local/bin"    # default: ~/.repolith/bin (`~` expands at run time)
 ```
+
+`crate` is the **binary target** name, which often differs from the package
+that contains it (this repo installs the binary `repolith` from the package
+`repolith-cli`).
+
+`package` selects **which package** to build when the source holds more than
+one — common for git repositories shipping test fixtures or a workspace of
+tools, where cargo refuses to guess:
+
+```
+error: multiple packages with binaries found: …
+Please specify a package, e.g. `cargo install --git <url> bin_only`
+```
+
+Leave it out unless you hit that error; omitting it lets cargo resolve on its
+own, which is right for single-package sources.
 
 **`kind = "docker"`** — `docker build` an image from the node's checkout
 (build-only: running containers stays out of scope, see

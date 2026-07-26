@@ -40,6 +40,7 @@ fn make_action(install_to: PathBuf, features: Vec<String>) -> CargoInstall {
             path: fixture_path(),
         },
         crate_name: Some("hello-world".to_string()),
+        package: None,
         features,
         install_to,
         deps: vec![],
@@ -125,6 +126,7 @@ fn action_at(source: PathBuf, install_to: PathBuf) -> CargoInstall {
         id: ActionId("hello::cargo-install::0".to_string()),
         source: CargoSource::Path { path: source },
         crate_name: Some("hello-world".to_string()),
+        package: None,
         features: vec![],
         install_to,
         deps: vec![],
@@ -206,4 +208,26 @@ async fn output_present_tracks_the_installed_binary() {
         "a deleted binary must be reported missing — this is what makes a \
          cache entry written by another machine safe to distrust"
     );
+}
+
+/// Two nodes over the same source that differ only by which package they
+/// select must not share an input hash — otherwise the second silently
+/// inherits the first's cached Success (issue #77).
+#[tokio::test]
+async fn input_hash_distinguishes_the_selected_package() {
+    let src = writable_fixture();
+    let install = TempDir::new().expect("tempdir");
+
+    let mut a = action_at(src.path().to_path_buf(), install.path().to_path_buf());
+    a.package = Some("pkg-a".to_string());
+    let mut b = action_at(src.path().to_path_buf(), install.path().to_path_buf());
+    b.package = Some("pkg-b".to_string());
+    let none = action_at(src.path().to_path_buf(), install.path().to_path_buf());
+
+    let ha = a.input_hash(&fresh_ctx()).await.expect("hash");
+    let hb = b.input_hash(&fresh_ctx()).await.expect("hash");
+    let hn = none.input_hash(&fresh_ctx()).await.expect("hash");
+
+    assert_ne!(ha, hb, "different packages must hash differently");
+    assert_ne!(ha, hn, "selecting a package must differ from not selecting");
 }

@@ -30,13 +30,20 @@ path = "crates/repolith-cli"
   crate = "repolith"
   install_to = "~/.cargo"      # → ~/.cargo/bin/repolith, already on PATH
 
-# Not yet expressible: `cargo-semver-checks`, which release-plz warns about
-# on every run. Its repository ships several packages with binaries (test
-# fixtures), and `cargo install --git` refuses to guess:
+# release-plz warns on every run that this is missing; it gates the semver
+# check on release PRs. No `path`, so cargo installs straight from the remote.
 #
-#   error: multiple packages with binaries found: bin_only, …
-#   Please specify a package, e.g. `cargo install --git <url> bin_only`
+# `package` is what makes this node possible: the repository ships several
+# packages with binaries (test fixtures), and cargo refuses to guess between
+# them. `package` selects it; `crate` still names the binary target.
 #
-# repolith passes `--bin` but never `--package`, so there is no way to
-# disambiguate. Add the node once that gap is closed; until then:
-#   cargo install cargo-semver-checks --locked
+# Heads-up: long build the first time (large dependency tree).
+[[node]]
+id = "cargo-semver-checks"
+git = "https://github.com/obi1kenobi/cargo-semver-checks"
+
+  [[node.action]]
+  kind = "cargo-install"
+  package = "cargo-semver-checks"
+  crate = "cargo-semver-checks"
+  install_to = "~/.cargo"
