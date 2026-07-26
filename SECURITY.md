@@ -68,6 +68,15 @@ as you would treat reviewing a new shell script that runs `git`,
 - **SQL injection** — every cache write goes through `rusqlite::params!`
   parameterized queries; no string concatenation reaches the SQLite
   driver.
+- **Neo4j cache credentials** — the optional `neo4j` cache backend reads
+  `REPOLITH_NEO4J_URI` / `REPOLITH_NEO4J_USER` / `REPOLITH_NEO4J_PASS`
+  from the environment only, **never** from `repolith.toml` (a malicious
+  manifest cannot redirect cache writes). These variables are consumed by
+  the CLI itself and are **not** part of `ENV_ALLOWLIST` — they never
+  enter `Ctx::env` and are never forwarded to spawned subprocesses.
+  Connection errors are redacted (the password is stripped from driver
+  messages) and every Cypher write is parameterized — no string
+  concatenation reaches the driver.
 - **Stable cancellation** — every spawned subprocess races against a
   shared `CancellationToken` so both `Ctrl-C` (SIGINT) and SIGTERM
   short-circuit the orchestrator without leaving zombie git/cargo

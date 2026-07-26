@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 const SCHEMA: &str = include_str!("schema.sql");
 
 /// `SQLite` cache backend. Cheap to clone (`Arc<Mutex<Connection>>` shared).
+#[derive(Clone)]
 pub struct SqliteCache {
     conn: Arc<Mutex<Connection>>,
 }

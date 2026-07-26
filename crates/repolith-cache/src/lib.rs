@@ -10,6 +10,18 @@ pub use repolith_core::cache::{Cache, CacheError, Result};
 pub mod sqlite;
 pub use sqlite::SqliteCache;
 
+/// Namespacing decorator — prefixes ids so multiple stacks can share one
+/// backend without collisions. See [`namespaced::NamespacedCache`].
+pub mod namespaced;
+pub use namespaced::NamespacedCache;
+
+/// Neo4j-backed [`Cache`] implementation (feature `neo4j`).
+/// See [`neo4j::Neo4jCache`].
+#[cfg(feature = "neo4j")]
+pub mod neo4j;
+#[cfg(feature = "neo4j")]
+pub use neo4j::{Neo4jCache, Neo4jConfig};
+
 #[cfg(test)]
 mod tests {
     use super::*;
