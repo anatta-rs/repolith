@@ -679,3 +679,79 @@ git = \"https://example.com/app.git\"
 ";
     expect_invalid_arg(toml, "requires `path`");
 }
+
+// ---------------------------------------------------------------------------
+// repolith action (federation) — parse + lexical containment (issue #63)
+// ---------------------------------------------------------------------------
+
+fn federation_manifest(action_body: &str) -> String {
+    format!("{DOCKER_NODE_HEADER}\n  [[node.action]]\n  kind = \"repolith\"\n{action_body}")
+}
+
+#[test]
+fn test_repolith_parses_with_default_manifest() {
+    let m = Manifest::from_toml(&federation_manifest("")).expect("bare repolith action must parse");
+    assert_eq!(m.action_ids()[0].0, "app::repolith::0");
+    match &m.nodes[0].actions[0] {
+        ActionEntry::Repolith { manifest } => assert!(manifest.is_none()),
+        other => panic!("expected Repolith, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_repolith_parses_with_explicit_manifest() {
+    let m = Manifest::from_toml(&federation_manifest(
+        "  manifest = \"stacks/repolith.toml\"\n",
+    ))
+    .expect("explicit manifest path must parse");
+    match &m.nodes[0].actions[0] {
+        ActionEntry::Repolith { manifest } => {
+            assert_eq!(
+                manifest.as_deref().unwrap().to_str(),
+                Some("stacks/repolith.toml")
+            );
+        }
+        other => panic!("expected Repolith, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_repolith_rejects_manifest_traversal() {
+    expect_invalid_arg(
+        &federation_manifest("  manifest = \"../other/repolith.toml\"\n"),
+        "contains `..`",
+    );
+}
+
+#[test]
+fn test_repolith_rejects_absolute_manifest() {
+    expect_invalid_arg(
+        &federation_manifest("  manifest = \"/etc/repolith.toml\"\n"),
+        "is absolute",
+    );
+}
+
+#[test]
+fn test_repolith_rejects_manifest_with_leading_dash() {
+    expect_invalid_arg(
+        &federation_manifest("  manifest = \"-f\"\n"),
+        "starts with `-`",
+    );
+}
+
+#[test]
+fn test_repolith_requires_node_path() {
+    let toml = "
+[orchestrator]
+schema_version = \"0.1\"
+name = \"test\"
+
+[[node]]
+id = \"app\"
+git = \"https://example.com/app.git\"
+
+  [[node.action]]
+  kind = \"repolith\"
+";
+    expect_invalid_arg(toml, "requires `path`");
+}

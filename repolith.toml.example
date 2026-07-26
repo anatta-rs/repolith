@@ -77,6 +77,21 @@ path = "../services/api-server"
   dockerfile = "Dockerfile"              # default: Dockerfile (relative to context)
   context = "."                          # default: the node's `path`
 
+# Federated sub-stack — the checkout contains its own repolith.toml,
+# synced as a nested plan with its own local cache. Cycles are rejected,
+# depth is capped at 8, and --jobs bounds the whole tree.
+[[node]]
+id = "platform-stack"
+git = "https://github.com/example-org/platform-stack"
+path = "../stacks/platform"
+
+  [[node.action]]
+  kind = "git-clone"
+
+  [[node.action]]
+  kind = "repolith"
+  manifest = "repolith.toml"    # default — relative to the node's `path`
+
 # `[[attached]]` blocks are recognized by the parser for forward
 # compatibility but currently do nothing — they ship with the M2
 # `template_apply` action.

@@ -205,9 +205,35 @@ async fn wait_for_shutdown_signal() -> Option<&'static str> {
     tokio::signal::ctrl_c().await.ok().map(|()| "SIGINT")
 }
 
-fn build_orchestrator(cli: &Cli, cancel: CancellationToken, jobs: usize) -> Result<Orchestrator> {
+fn build_orchestrator(
+    cli: &Cli,
+    cancel: CancellationToken,
+    jobs: usize,
+    mode: ExecMode,
+) -> Result<Orchestrator> {
     let manifest = load_manifest(&cli.manifest)?;
-    let actions = factory::build_actions_from_manifest(&manifest)?;
+
+    // Federation wiring: one semaphore bounds the whole tree of
+    // orchestrators; the hooks let nested `RepolithSync` actions rebuild
+    // this factory + a local SQLite cache for each child stack. The
+    // canonicalized root manifest path seeds the cycle-detection chain.
+    let manifest_path = cli
+        .manifest
+        .canonicalize()
+        .with_context(|| format!("canonicalize manifest `{}`", cli.manifest.display()))?;
+    let base_dir = manifest_path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
+    let hooks = factory::CliFederationHooks::new(mode, std::sync::Arc::clone(&sem));
+    let fctx = factory::FactoryCtx {
+        base_dir,
+        chain: vec![manifest_path],
+        mode,
+        sem: std::sync::Arc::clone(&sem),
+        hooks,
+    };
+    let actions = factory::build_actions_from_manifest(&manifest, &fctx)?;
 
     let cache_path = cli.cache_path.clone().unwrap_or_else(default_cache_path);
     let cache = SqliteCache::open(&cache_path)
@@ -223,6 +249,7 @@ fn build_orchestrator(cli: &Cli, cancel: CancellationToken, jobs: usize) -> Resu
         .cache(cache)
         .manifest(manifest)
         .max_parallelism(jobs)
+        .shared_semaphore(sem)
         .base_ctx(base_ctx);
 
     for action in actions {
@@ -233,7 +260,12 @@ fn build_orchestrator(cli: &Cli, cancel: CancellationToken, jobs: usize) -> Resu
 }
 
 async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Result<()> {
-    let mut orch = build_orchestrator(cli, cancel, args.jobs)?;
+    let mode = if args.keep_going {
+        ExecMode::KeepGoing
+    } else {
+        ExecMode::FailFast
+    };
+    let mut orch = build_orchestrator(cli, cancel, args.jobs, mode)?;
     let plan = orch.compute_plan().await?;
 
     if args.explain || args.dry_run {
@@ -251,12 +283,6 @@ async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Resu
         return Ok(());
     }
 
-    let mode = if args.keep_going {
-        ExecMode::KeepGoing
-    } else {
-        ExecMode::FailFast
-    };
-
     match orch.execute_plan(&plan, mode).await {
         Ok(events) => {
             print_events(&events);
@@ -271,7 +297,7 @@ async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Resu
 }
 
 async fn run_status(cli: &Cli, cancel: CancellationToken) -> Result<()> {
-    let orch = build_orchestrator(cli, cancel, num_cpus::get())?;
+    let orch = build_orchestrator(cli, cancel, num_cpus::get(), ExecMode::FailFast)?;
     let plan = orch.compute_plan().await?;
     let reasons: HashMap<_, _> = plan.reasons().iter().collect();
 

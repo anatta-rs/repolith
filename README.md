@@ -199,8 +199,26 @@ context = "build"              # default: the node's `path`
 paths only, no `..`, validated at parse time and re-checked after symlink
 resolution at build time.
 
+**`kind = "repolith"`** — federation: the node's checkout contains its own
+`repolith.toml`, executed as a nested plan (orchestrator-of-orchestrators).
+Requires `path` on the node; the one field is optional:
+
+```toml
+[[node.action]]
+kind = "repolith"
+manifest = "repolith.toml"     # default — relative to the node's `path`
+```
+
+The child stack keeps its **own local cache**
+(`<stack>/.repolith/cache.db`), exactly as if you had run `repolith sync`
+in that directory. Guard rails: manifest cycles (`A -> B -> A`) are
+rejected with the offending chain, federation depth is capped at 8,
+`--jobs N` bounds the **whole tree** (one global pool, never N per level),
+and Ctrl-C cancels every level down to the subprocess groups. The
+`manifest` path obeys the same two-stage containment as docker's paths.
+
 Actions on the same node run **in declaration order**; independent nodes run
-**in parallel**. More kinds land in M2 (see [Roadmap](#roadmap)).
+**in parallel**.
 
 ## Architecture
 
@@ -231,8 +249,8 @@ publishes, tags, and cuts the GitHub Release.
 
 ### Roadmap
 
-- **M2** — federation `kind = "repolith"` (orchestrator-of-orchestrators),
-  Neo4j cache backend. (`docker` action: ✅ shipped.)
+- **M2** — Neo4j cache backend (shared, graph-queryable build events).
+  (`docker` action: ✅ shipped. Federation `kind = "repolith"`: ✅ shipped.)
 - **M3** — watch mode (re-plan on file change), `template_apply` action
   driving `AttachedEntry::Outbound`.
 

@@ -75,7 +75,7 @@ pub struct Manifest {
 }
 
 /// Tagged variant of `[[node.action]]`, dispatched by the TOML `kind` field
-/// (kebab-case: `"git-clone"`, `"cargo-install"`, `"docker"`).
+/// (kebab-case: `"git-clone"`, `"cargo-install"`, `"docker"`, `"repolith"`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ActionEntry {
@@ -111,6 +111,21 @@ pub enum ActionEntry {
         /// as `dockerfile`.
         #[serde(default)]
         context: Option<PathBuf>,
+    },
+    /// `kind = "repolith"` — federation: the node's checkout contains its
+    /// own `repolith.toml`, executed as a nested plan
+    /// (orchestrator-of-orchestrators).
+    ///
+    /// The nested stack keeps its **own local cache**, exactly as if
+    /// `repolith sync` had been run in that directory by hand. Cycle
+    /// detection and a maximum federation depth are enforced by the
+    /// executing action (`repolith-engine::federation`).
+    Repolith {
+        /// Child manifest path relative to the node's `path`. Defaults to
+        /// `repolith.toml`. Must stay inside the node's checkout: relative,
+        /// no `..` component, no leading dash, no control characters.
+        #[serde(default)]
+        manifest: Option<PathBuf>,
     },
 }
 
@@ -326,7 +341,7 @@ fn check_scp_url(url: &str, node: &str) -> Result<(), ManifestError> {
 ///   (CWE-88), even behind `-f`/`--`.
 /// - Control characters — NUL truncates at the syscall layer, newlines
 ///   confuse downstream tooling.
-fn check_docker_path_safe(
+fn check_contained_path(
     path: &std::path::Path,
     node: &str,
     field: &str,
@@ -479,10 +494,10 @@ impl Manifest {
                     } => {
                         check_docker_tag(tag, &n.id)?;
                         if let Some(df) = dockerfile {
-                            check_docker_path_safe(df, &n.id, "dockerfile")?;
+                            check_contained_path(df, &n.id, "dockerfile")?;
                         }
                         if let Some(ctx) = context {
-                            check_docker_path_safe(ctx, &n.id, "context")?;
+                            check_contained_path(ctx, &n.id, "context")?;
                         }
                         // A docker build needs a checkout to build from.
                         if n.path.is_none() {
@@ -490,6 +505,20 @@ impl Manifest {
                                 node: n.id.clone(),
                                 reason:
                                     "docker action requires `path` on the node (build context base)"
+                                        .to_string(),
+                            });
+                        }
+                    }
+                    ActionEntry::Repolith { manifest } => {
+                        if let Some(m) = manifest {
+                            check_contained_path(m, &n.id, "manifest")?;
+                        }
+                        // Federation descends into the node's checkout.
+                        if n.path.is_none() {
+                            return Err(ManifestError::InvalidArg {
+                                node: n.id.clone(),
+                                reason:
+                                    "repolith action requires `path` on the node (child stack root)"
                                         .to_string(),
                             });
                         }
@@ -531,5 +560,6 @@ pub fn action_kind(a: &ActionEntry) -> &'static str {
         ActionEntry::GitClone => "git-clone",
         ActionEntry::CargoInstall { .. } => "cargo-install",
         ActionEntry::Docker { .. } => "docker",
+        ActionEntry::Repolith { .. } => "repolith",
     }
 }
