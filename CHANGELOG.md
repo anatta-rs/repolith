@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.9](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.8...repolith-core-v0.0.9) - 2026-07-26
+
+### Fixed
+
+- *(cache)* input_hash honnête — contenu, plateforme, présence de l'artefact (closes #73) ([#74](https://github.com/anatta-rs/repolith/pull/74))
+
 ## [0.0.8](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.7...repolith-core-v0.0.8) - 2026-07-26
 
 ### Added
