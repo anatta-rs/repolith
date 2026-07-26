@@ -21,7 +21,7 @@ path = "src/main.rs"
 
 [dependencies]
 repolith-core = { path = "../repolith-core", version = "0.0.7" }
-repolith-cache = { path = "../repolith-cache", version = "0.0.7" }
+repolith-cache = { path = "../repolith-cache", version = "0.0.7", features = ["neo4j"] }
 repolith-engine = { path = "../repolith-engine", version = "0.0.7" }
 repolith-actions = { path = "../repolith-actions", version = "0.0.7", features = ["git", "cargo", "docker"] }
 anyhow = "1"

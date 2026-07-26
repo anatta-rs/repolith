@@ -220,6 +220,24 @@ and Ctrl-C cancels every level down to the subprocess groups. The
 Actions on the same node run **in declaration order**; independent nodes run
 **in parallel**.
 
+## Cache backends
+
+The build cache is pluggable (`Cache` trait in `repolith-core`). Two
+backends ship today; `--cache` (or `REPOLITH_CACHE`) selects one:
+
+| Backend | Select with | Storage | When |
+|---|---|---|---|
+| `sqlite` *(default)* | — | local file, `~/.repolith/cache.db` (`--cache-path`) | single machine — zero config |
+| `neo4j` | `--cache neo4j` | shared server, build events as graph data | multi-machine / federated stacks |
+
+The Neo4j backend reads `REPOLITH_NEO4J_URI`, `REPOLITH_NEO4J_USER`, and
+`REPOLITH_NEO4J_PASS` from the environment — credentials never live in
+`repolith.toml`, and these variables are never forwarded to spawned
+subprocesses. Schema: one `(:Action {id})` node per action with a `LAST`
+relationship to its most recent `(:BuildEvent)`; layer writes are one
+transaction. `NamespacedCache` (library-level) lets multiple stacks share
+one server without id collisions.
+
 ## Architecture
 
 5 crates, layered execution with `FuturesUnordered` + `CancellationToken` +
@@ -229,7 +247,7 @@ Actions on the same node run **in declaration order**; independent nodes run
 | Crate | Purpose |
 |---|---|
 | [`repolith-core`](https://crates.io/crates/repolith-core) | Types, traits (`Action`, `Cache`), manifest parser, layered `Plan`. |
-| [`repolith-cache`](https://crates.io/crates/repolith-cache) | `SqliteCache` (rusqlite, bundled, WAL). |
+| [`repolith-cache`](https://crates.io/crates/repolith-cache) | `SqliteCache` (rusqlite, bundled, WAL), `Neo4jCache` (feature `neo4j`), `NamespacedCache`. |
 | [`repolith-engine`](https://crates.io/crates/repolith-engine) | Async `Orchestrator` with cancellation + semaphore. |
 | [`repolith-actions`](https://crates.io/crates/repolith-actions) | `GitClone` (feature `git`), `CargoInstall` (feature `cargo`), `DockerBuild` (feature `docker`). |
 | [`repolith-cli`](https://crates.io/crates/repolith-cli) | `repolith sync / status` — the binary you run. |
@@ -249,8 +267,8 @@ publishes, tags, and cuts the GitHub Release.
 
 ### Roadmap
 
-- **M2** — Neo4j cache backend (shared, graph-queryable build events).
-  (`docker` action: ✅ shipped. Federation `kind = "repolith"`: ✅ shipped.)
+- **M2** — ✅ complete: `docker` action, federation `kind = "repolith"`,
+  Neo4j cache backend.
 - **M3** — watch mode (re-plan on file change), `template_apply` action
   driving `AttachedEntry::Outbound`.
 

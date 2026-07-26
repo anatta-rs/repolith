@@ -35,9 +35,16 @@ struct Cli {
     #[arg(long, default_value = "./repolith.toml", global = true)]
     manifest: PathBuf,
 
-    /// Cache database path. Defaults to `~/.repolith/cache.db`.
+    /// Cache database path (sqlite backend only). Defaults to
+    /// `~/.repolith/cache.db`.
     #[arg(long, env = "REPOLITH_CACHE_PATH", global = true)]
     cache_path: Option<PathBuf>,
+
+    /// Cache backend. `neo4j` reads `REPOLITH_NEO4J_URI` / `_USER` /
+    /// `_PASS` from the environment (credentials never live in the
+    /// manifest).
+    #[arg(long, env = "REPOLITH_CACHE", global = true, value_enum, default_value_t = CacheBackend::Sqlite)]
+    cache: CacheBackend,
 
     /// Verbosity: `-v` for debug, `-vv` for trace.
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
@@ -45,6 +52,16 @@ struct Cli {
 
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+/// Selectable cache backends. `SQLite` is the zero-config default;
+/// Neo4j targets shared / multi-machine setups.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheBackend {
+    /// Local `SQLite` file (default).
+    Sqlite,
+    /// Shared Neo4j server — env-configured, see `--cache` help.
+    Neo4j,
 }
 
 #[derive(Subcommand, Debug)]
@@ -205,7 +222,24 @@ async fn wait_for_shutdown_signal() -> Option<&'static str> {
     tokio::signal::ctrl_c().await.ok().map(|()| "SIGINT")
 }
 
-fn build_orchestrator(
+/// Open the cache backend selected by `--cache` / `REPOLITH_CACHE`.
+async fn open_cache(cli: &Cli) -> Result<Box<dyn repolith_core::cache::Cache>> {
+    match cli.cache {
+        CacheBackend::Sqlite => {
+            let cache_path = cli.cache_path.clone().unwrap_or_else(default_cache_path);
+            let cache = SqliteCache::open(&cache_path)
+                .with_context(|| format!("opening cache at `{}`", cache_path.display()))?;
+            Ok(Box::new(cache))
+        }
+        CacheBackend::Neo4j => {
+            let cfg = repolith_cache::Neo4jConfig::from_env()?;
+            let cache = repolith_cache::Neo4jCache::connect(&cfg).await?;
+            Ok(Box::new(cache))
+        }
+    }
+}
+
+async fn build_orchestrator(
     cli: &Cli,
     cancel: CancellationToken,
     jobs: usize,
@@ -235,9 +269,7 @@ fn build_orchestrator(
     };
     let actions = factory::build_actions_from_manifest(&manifest, &fctx)?;
 
-    let cache_path = cli.cache_path.clone().unwrap_or_else(default_cache_path);
-    let cache = SqliteCache::open(&cache_path)
-        .with_context(|| format!("opening cache at `{}`", cache_path.display()))?;
+    let cache = open_cache(cli).await?;
 
     let base_ctx = Ctx {
         cancel,
@@ -246,7 +278,7 @@ fn build_orchestrator(
     };
 
     let mut builder = Orchestrator::builder()
-        .cache(cache)
+        .cache_boxed(cache)
         .manifest(manifest)
         .max_parallelism(jobs)
         .shared_semaphore(sem)
@@ -265,7 +297,7 @@ async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Resu
     } else {
         ExecMode::FailFast
     };
-    let mut orch = build_orchestrator(cli, cancel, args.jobs, mode)?;
+    let mut orch = build_orchestrator(cli, cancel, args.jobs, mode).await?;
     let plan = orch.compute_plan().await?;
 
     if args.explain || args.dry_run {
@@ -297,7 +329,7 @@ async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Resu
 }
 
 async fn run_status(cli: &Cli, cancel: CancellationToken) -> Result<()> {
-    let orch = build_orchestrator(cli, cancel, num_cpus::get(), ExecMode::FailFast)?;
+    let orch = build_orchestrator(cli, cancel, num_cpus::get(), ExecMode::FailFast).await?;
     let plan = orch.compute_plan().await?;
     let reasons: HashMap<_, _> = plan.reasons().iter().collect();
 
