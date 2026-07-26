@@ -544,3 +544,138 @@ path = \"./a\"
         other => panic!("expected InvalidArg, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// docker action — parse + two-stage containment (lexical half, issue #61)
+// ---------------------------------------------------------------------------
+
+const DOCKER_NODE_HEADER: &str = "
+[orchestrator]
+schema_version = \"0.1\"
+name = \"test\"
+
+[[node]]
+id = \"app\"
+git = \"https://example.com/app.git\"
+path = \"./app\"
+";
+
+fn docker_manifest(action_body: &str) -> String {
+    format!("{DOCKER_NODE_HEADER}\n  [[node.action]]\n  kind = \"docker\"\n{action_body}")
+}
+
+fn expect_invalid_arg(toml: &str, needle: &str) {
+    match Manifest::from_toml(toml).expect_err("manifest must fail validation") {
+        ManifestError::InvalidArg { node, reason } => {
+            assert_eq!(node, "app");
+            assert!(reason.contains(needle), "expected `{needle}` in: {reason}");
+        }
+        other => panic!("expected InvalidArg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_docker_parses_with_all_fields() {
+    let m = Manifest::from_toml(&docker_manifest(
+        "  tag = \"app:latest\"\n  dockerfile = \"build/Dockerfile\"\n  context = \"build\"\n",
+    ))
+    .expect("valid docker action must parse");
+    assert_eq!(m.action_ids()[0].0, "app::docker::0");
+}
+
+#[test]
+fn test_docker_defaults_dockerfile_and_context() {
+    let m = Manifest::from_toml(&docker_manifest("  tag = \"app:latest\"\n"))
+        .expect("tag-only docker action must parse");
+    match &m.nodes[0].actions[0] {
+        ActionEntry::Docker {
+            dockerfile,
+            context,
+            ..
+        } => {
+            assert!(dockerfile.is_none());
+            assert!(context.is_none());
+        }
+        other => panic!("expected Docker, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_docker_rejects_empty_tag() {
+    expect_invalid_arg(&docker_manifest("  tag = \"\"\n"), "`tag` is empty");
+}
+
+#[test]
+fn test_docker_rejects_tag_with_leading_dash() {
+    // `-t --network=host` style injection through the tag value.
+    expect_invalid_arg(
+        &docker_manifest("  tag = \"--network=host\"\n"),
+        "starts with `-`",
+    );
+}
+
+#[test]
+fn test_docker_rejects_tag_outside_charset() {
+    expect_invalid_arg(
+        &docker_manifest("  tag = \"app latest\"\n"),
+        "allowed charset",
+    );
+}
+
+#[test]
+fn test_docker_rejects_dockerfile_traversal() {
+    expect_invalid_arg(
+        &docker_manifest("  tag = \"app:latest\"\n  dockerfile = \"../../etc/passwd\"\n"),
+        "contains `..`",
+    );
+}
+
+#[test]
+fn test_docker_rejects_context_traversal() {
+    expect_invalid_arg(
+        &docker_manifest("  tag = \"app:latest\"\n  context = \"a/../../b\"\n"),
+        "contains `..`",
+    );
+}
+
+#[test]
+fn test_docker_rejects_absolute_context() {
+    expect_invalid_arg(
+        &docker_manifest("  tag = \"app:latest\"\n  context = \"/etc\"\n"),
+        "is absolute",
+    );
+}
+
+#[test]
+fn test_docker_rejects_dockerfile_with_leading_dash() {
+    expect_invalid_arg(
+        &docker_manifest("  tag = \"app:latest\"\n  dockerfile = \"-f\"\n"),
+        "starts with `-`",
+    );
+}
+
+#[test]
+fn test_docker_rejects_dockerfile_with_nul() {
+    expect_invalid_arg(
+        &docker_manifest("  tag = \"app:latest\"\n  dockerfile = \"Docker\\u0000file\"\n"),
+        "control character",
+    );
+}
+
+#[test]
+fn test_docker_requires_node_path() {
+    let toml = "
+[orchestrator]
+schema_version = \"0.1\"
+name = \"test\"
+
+[[node]]
+id = \"app\"
+git = \"https://example.com/app.git\"
+
+  [[node.action]]
+  kind = \"docker\"
+  tag = \"app:latest\"
+";
+    expect_invalid_arg(toml, "requires `path`");
+}

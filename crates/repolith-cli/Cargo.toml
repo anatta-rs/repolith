@@ -23,7 +23,7 @@ path = "src/main.rs"
 repolith-core = { path = "../repolith-core", version = "0.0.5" }
 repolith-cache = { path = "../repolith-cache", version = "0.0.5" }
 repolith-engine = { path = "../repolith-engine", version = "0.0.5" }
-repolith-actions = { path = "../repolith-actions", version = "0.0.5", features = ["git", "cargo"] }
+repolith-actions = { path = "../repolith-actions", version = "0.0.5", features = ["git", "cargo", "docker"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 comfy-table = "7"
