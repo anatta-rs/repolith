@@ -84,8 +84,22 @@ pub enum ActionEntry {
     /// `kind = "cargo-install"` — `cargo install` from the node's source tree.
     CargoInstall {
         /// Crate name (TOML key `crate`). Defaults to the node's `id` when absent.
+        ///
+        /// This is the **binary** target name (`cargo install --bin`), which
+        /// may differ from the package that contains it — see [`Self::CargoInstall::package`].
         #[serde(default, rename = "crate")]
         crate_name: Option<String>,
+        /// Package to select from the source, when the source contains more
+        /// than one (`cargo install [CRATE]`, the positional argument).
+        ///
+        /// Needed for git repositories that ship several packages with
+        /// binaries — test fixtures, tool workspaces — where cargo refuses
+        /// to guess. **No implicit default**: deriving it from
+        /// [`Self::CargoInstall::crate_name`] would break the common case
+        /// where the binary name differs from the package name. Absent
+        /// means no positional argument, i.e. cargo's own resolution.
+        #[serde(default)]
+        package: Option<String>,
         /// Cargo features to enable.
         #[serde(default)]
         features: Vec<String>,
@@ -414,6 +428,103 @@ fn check_docker_tag(tag: &str, node: &str) -> Result<(), ManifestError> {
     Ok(())
 }
 
+/// Argv-injection sweep + per-kind requirements for one action.
+///
+/// Split out of [`Manifest::validate`] so that function stays under the
+/// workspace's `clippy::too_many_lines` threshold — same reason
+/// `classify` lives outside `Plan::compute`.
+fn check_action(node: &NodeEntry, action: &ActionEntry) -> Result<(), ManifestError> {
+    match action {
+        ActionEntry::CargoInstall {
+            crate_name,
+            package,
+            features,
+            ..
+        } => {
+            if let Some(name) = crate_name {
+                check_no_leading_dash(name, &node.id, "crate")?;
+                if name.contains(',') {
+                    return Err(ManifestError::InvalidArg {
+                        node: node.id.clone(),
+                        reason: format!(
+                            "`crate` name `{name}` contains `,` which would split cargo's --features list"
+                        ),
+                    });
+                }
+            }
+            // `package` becomes cargo's positional argument, so
+            // the same argv guards apply. A leading dash would be
+            // read as a flag; `@` would be parsed as the version
+            // spec of `CRATE@VER` and silently select something
+            // else.
+            if let Some(pkg) = package {
+                check_no_leading_dash(pkg, &node.id, "package")?;
+                if pkg.is_empty() {
+                    return Err(ManifestError::InvalidArg {
+                        node: node.id.clone(),
+                        reason: "`package` is empty".to_string(),
+                    });
+                }
+                if pkg.contains('@') {
+                    return Err(ManifestError::InvalidArg {
+                        node: node.id.clone(),
+                        reason: format!(
+                            "`package` `{pkg}` contains `@`, which cargo parses as a version spec (`CRATE@VER`)"
+                        ),
+                    });
+                }
+            }
+            for feature in features {
+                check_no_leading_dash(feature, &node.id, "features entry")?;
+                if feature.contains(',') {
+                    return Err(ManifestError::InvalidArg {
+                        node: node.id.clone(),
+                        reason: format!(
+                            "feature `{feature}` contains `,` which would split cargo's --features list"
+                        ),
+                    });
+                }
+            }
+        }
+        ActionEntry::Docker {
+            tag,
+            dockerfile,
+            context,
+        } => {
+            check_docker_tag(tag, &node.id)?;
+            if let Some(df) = dockerfile {
+                check_contained_path(df, &node.id, "dockerfile")?;
+            }
+            if let Some(ctx) = context {
+                check_contained_path(ctx, &node.id, "context")?;
+            }
+            // A docker build needs a checkout to build from.
+            if node.path.is_none() {
+                return Err(ManifestError::InvalidArg {
+                    node: node.id.clone(),
+                    reason: "docker action requires `path` on the node (build context base)"
+                        .to_string(),
+                });
+            }
+        }
+        ActionEntry::Repolith { manifest } => {
+            if let Some(m) = manifest {
+                check_contained_path(m, &node.id, "manifest")?;
+            }
+            // Federation descends into the node's checkout.
+            if node.path.is_none() {
+                return Err(ManifestError::InvalidArg {
+                    node: node.id.clone(),
+                    reason: "repolith action requires `path` on the node (child stack root)"
+                        .to_string(),
+                });
+            }
+        }
+        ActionEntry::GitClone => {}
+    }
+    Ok(())
+}
+
 impl Manifest {
     /// Parse and validate a manifest from a TOML source string.
     ///
@@ -458,73 +569,7 @@ impl Manifest {
                 check_url(url, &n.id)?;
             }
             for action in &n.actions {
-                match action {
-                    ActionEntry::CargoInstall {
-                        crate_name,
-                        features,
-                        ..
-                    } => {
-                        if let Some(name) = crate_name {
-                            check_no_leading_dash(name, &n.id, "crate")?;
-                            if name.contains(',') {
-                                return Err(ManifestError::InvalidArg {
-                                    node: n.id.clone(),
-                                    reason: format!(
-                                        "`crate` name `{name}` contains `,` which would split cargo's --features list"
-                                    ),
-                                });
-                            }
-                        }
-                        for feature in features {
-                            check_no_leading_dash(feature, &n.id, "features entry")?;
-                            if feature.contains(',') {
-                                return Err(ManifestError::InvalidArg {
-                                    node: n.id.clone(),
-                                    reason: format!(
-                                        "feature `{feature}` contains `,` which would split cargo's --features list"
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                    ActionEntry::Docker {
-                        tag,
-                        dockerfile,
-                        context,
-                    } => {
-                        check_docker_tag(tag, &n.id)?;
-                        if let Some(df) = dockerfile {
-                            check_contained_path(df, &n.id, "dockerfile")?;
-                        }
-                        if let Some(ctx) = context {
-                            check_contained_path(ctx, &n.id, "context")?;
-                        }
-                        // A docker build needs a checkout to build from.
-                        if n.path.is_none() {
-                            return Err(ManifestError::InvalidArg {
-                                node: n.id.clone(),
-                                reason:
-                                    "docker action requires `path` on the node (build context base)"
-                                        .to_string(),
-                            });
-                        }
-                    }
-                    ActionEntry::Repolith { manifest } => {
-                        if let Some(m) = manifest {
-                            check_contained_path(m, &n.id, "manifest")?;
-                        }
-                        // Federation descends into the node's checkout.
-                        if n.path.is_none() {
-                            return Err(ManifestError::InvalidArg {
-                                node: n.id.clone(),
-                                reason:
-                                    "repolith action requires `path` on the node (child stack root)"
-                                        .to_string(),
-                            });
-                        }
-                    }
-                    ActionEntry::GitClone => {}
-                }
+                check_action(n, action)?;
             }
         }
         Ok(())

@@ -755,3 +755,63 @@ git = \"https://example.com/app.git\"
 ";
     expect_invalid_arg(toml, "requires `path`");
 }
+
+// ---------------------------------------------------------------------------
+// cargo-install `package` — cargo's positional selector (issue #77)
+// ---------------------------------------------------------------------------
+
+fn cargo_install_manifest(action_body: &str) -> String {
+    format!("{DOCKER_NODE_HEADER}\n  [[node.action]]\n  kind = \"cargo-install\"\n{action_body}")
+}
+
+#[test]
+fn test_cargo_install_parses_package() {
+    let m = Manifest::from_toml(&cargo_install_manifest(
+        "  crate = \"cargo-semver-checks\"\n  package = \"cargo-semver-checks\"\n",
+    ))
+    .expect("package must parse");
+    match &m.nodes[0].actions[0] {
+        ActionEntry::CargoInstall { package, .. } => {
+            assert_eq!(package.as_deref(), Some("cargo-semver-checks"));
+        }
+        other => panic!("expected CargoInstall, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cargo_install_package_defaults_to_none() {
+    // No implicit default: absent means "let cargo resolve", which keeps
+    // every pre-existing manifest behaving exactly as before.
+    let m =
+        Manifest::from_toml(&cargo_install_manifest("  crate = \"tool\"\n")).expect("must parse");
+    match &m.nodes[0].actions[0] {
+        ActionEntry::CargoInstall { package, .. } => assert!(package.is_none()),
+        other => panic!("expected CargoInstall, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cargo_install_rejects_empty_package() {
+    expect_invalid_arg(
+        &cargo_install_manifest("  package = \"\"\n"),
+        "`package` is empty",
+    );
+}
+
+#[test]
+fn test_cargo_install_rejects_package_with_leading_dash() {
+    expect_invalid_arg(
+        &cargo_install_manifest("  package = \"--offline\"\n"),
+        "starts with `-`",
+    );
+}
+
+#[test]
+fn test_cargo_install_rejects_package_with_at_sign() {
+    // `CRATE@VER` is cargo's version-spec syntax; letting `@` through would
+    // silently select a different version than the manifest declares.
+    expect_invalid_arg(
+        &cargo_install_manifest("  package = \"tool@1.2.3\"\n"),
+        "version spec",
+    );
+}

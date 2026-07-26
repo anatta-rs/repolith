@@ -41,9 +41,15 @@ pub struct CargoInstall {
     pub id: ActionId,
     /// Where the crate source lives.
     pub source: CargoSource,
-    /// Crate name to install. When `None`, defaults to the last `::`-separated
-    /// segment of [`Self::id`] (the convention used by manifest-derived ids).
+    /// Binary target to install (`--bin`). When `None`, defaults to the last
+    /// `::`-separated segment of [`Self::id`] (the convention used by
+    /// manifest-derived ids).
     pub crate_name: Option<String>,
+    /// Package to select from the source, when it holds more than one
+    /// (cargo's positional `[CRATE]` argument). `None` leaves the choice to
+    /// cargo — see the argv comment in [`Action::execute`] for why this has
+    /// no implicit default.
+    pub package: Option<String>,
     /// Cargo features to enable.
     pub features: Vec<String>,
     /// `--root` argument: cargo writes the binary to `<install_to>/bin/<crate>`.
@@ -126,6 +132,11 @@ impl Action for CargoInstall {
         }
         h.update(b":crate:");
         h.update(self.resolved_crate_name().as_bytes());
+        // Two nodes over the same source that differ only by which package
+        // they select must not share a hash, or the second silently inherits
+        // the first's cached Success.
+        h.update(b":pkg:");
+        h.update(self.package.as_deref().unwrap_or("").as_bytes());
 
         // Mix in `cargo --version` so a toolchain bump invalidates the cache.
         let mut cmd = Command::new("cargo");
@@ -163,11 +174,22 @@ impl Action for CargoInstall {
                 cmd.args(["--path", p]);
             }
         }
-        // Use `--bin <NAME>` instead of the positional `<CRATE>` argument:
-        // the positional form filters by *package* name and rejects any
-        // mismatch, so packages that expose multiple binaries (or use a
-        // package name different from the binary name) can't be installed.
-        // `--bin` filters by binary target name and works in both cases.
+        // Two orthogonal selectors, and both are needed:
+        //
+        // - the positional `[CRATE]` picks the *package* out of the source
+        //   (cargo has no `--package` for `install`);
+        // - `--bin` picks the binary *target* within it.
+        //
+        // Only `--bin` used to be passed, because the positional alone
+        // rejects a package whose name differs from the binary's. That fix
+        // stands — but it left multi-package git repos unreachable, since
+        // cargo resolves the package first and refuses to guess between
+        // several (issue #77). Passing the positional only when `package` is
+        // set keeps the old behavior byte-for-byte for every existing
+        // manifest.
+        if let Some(pkg) = &self.package {
+            cmd.arg(pkg);
+        }
         let crate_name = self.resolved_crate_name();
         cmd.args(["--bin", &crate_name]);
         if !self.features.is_empty() {

@@ -43,7 +43,9 @@ path = "../tools/migration-tool"
 
   [[node.action]]
   kind = "cargo-install"
-  crate = "migrate"                 # defaults to the node's `id` when absent
+  crate = "migrate"                 # BINARY name; defaults to the node's `id`
+  # package = "migration-tools"     # only when the source holds several
+                                    # packages and cargo refuses to guess
   features = ["postgres"]           # cargo features to enable (default: none)
   install_to = "~/.local/bin"       # defaults to ~/.repolith/bin when absent
 
