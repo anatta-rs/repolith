@@ -815,3 +815,56 @@ fn test_cargo_install_rejects_package_with_at_sign() {
         "version spec",
     );
 }
+
+// ---------------------------------------------------------------------------
+// cargo-install `profile` — cargo's --profile (issue #82)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cargo_install_parses_profile() {
+    let m = Manifest::from_toml(&cargo_install_manifest(
+        "  crate = \"tool\"\n  profile = \"dev\"\n",
+    ))
+    .expect("profile must parse");
+    match &m.nodes[0].actions[0] {
+        ActionEntry::CargoInstall { profile, .. } => {
+            assert_eq!(profile.as_deref(), Some("dev"));
+        }
+        other => panic!("expected CargoInstall, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cargo_install_profile_defaults_to_none() {
+    // Absent means cargo's default (release) — existing manifests unchanged.
+    let m =
+        Manifest::from_toml(&cargo_install_manifest("  crate = \"tool\"\n")).expect("must parse");
+    match &m.nodes[0].actions[0] {
+        ActionEntry::CargoInstall { profile, .. } => assert!(profile.is_none()),
+        other => panic!("expected CargoInstall, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cargo_install_rejects_empty_profile() {
+    expect_invalid_arg(
+        &cargo_install_manifest("  profile = \"\"\n"),
+        "`profile` is empty",
+    );
+}
+
+#[test]
+fn test_cargo_install_rejects_profile_with_leading_dash() {
+    expect_invalid_arg(
+        &cargo_install_manifest("  profile = \"--offline\"\n"),
+        "starts with `-`",
+    );
+}
+
+#[test]
+fn test_cargo_install_rejects_profile_outside_charset() {
+    expect_invalid_arg(
+        &cargo_install_manifest("  profile = \"dev release\"\n"),
+        "allowed charset",
+    );
+}

@@ -50,6 +50,8 @@ pub struct CargoInstall {
     /// cargo — see the argv comment in [`Action::execute`] for why this has
     /// no implicit default.
     pub package: Option<String>,
+    /// Cargo profile (`--profile`). `None` leaves cargo's default, release.
+    pub profile: Option<String>,
     /// Cargo features to enable.
     pub features: Vec<String>,
     /// `--root` argument: cargo writes the binary to `<install_to>/bin/<crate>`.
@@ -137,6 +139,12 @@ impl Action for CargoInstall {
         // the first's cached Success.
         h.update(b":pkg:");
         h.update(self.package.as_deref().unwrap_or("").as_bytes());
+        // The profile changes the artifact but not where it lands, so
+        // `output_present` cannot tell release from debug. Without this the
+        // cache would report `up to date` after a profile switch, leaving
+        // the other profile's binary installed.
+        h.update(b":profile:");
+        h.update(self.profile.as_deref().unwrap_or("").as_bytes());
 
         // Mix in `cargo --version` so a toolchain bump invalidates the cache.
         let mut cmd = Command::new("cargo");
@@ -192,6 +200,9 @@ impl Action for CargoInstall {
         }
         let crate_name = self.resolved_crate_name();
         cmd.args(["--bin", &crate_name]);
+        if let Some(profile) = &self.profile {
+            cmd.args(["--profile", profile]);
+        }
         if !self.features.is_empty() {
             cmd.args(["--features", &self.features.join(",")]);
         }
