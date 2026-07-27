@@ -44,6 +44,7 @@ path = "../tools/migration-tool"
   [[node.action]]
   kind = "cargo-install"
   crate = "migrate"                 # BINARY name; defaults to the node's `id`
+  # profile = "dev"                 # debug build — fast to compile, slow to run
   # package = "migration-tools"     # only when the source holds several
                                     # packages and cargo refuses to guess
   features = ["postgres"]           # cargo features to enable (default: none)

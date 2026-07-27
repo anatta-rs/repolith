@@ -1,0 +1,35 @@
+# Working-copy variant of `repolith.toml`.
+#
+#   repolith sync --manifest repolith.dev.toml
+#
+# Same node, two differences that matter while iterating:
+#
+#   * `profile = "dev"` — keeps debug symbols and skips optimisation. Measured
+#     here, cold and without a compiler cache: 25.0 s against 26.8 s release,
+#     so only ~7 % quicker, for a binary 3.5x larger. The reason to set it is
+#     debuggability, not speed — this crate's build is dominated by C
+#     dependencies and proc macros, which no profile affects.
+#   * it still points at this checkout, so what you install is what you edited.
+#
+# There is no `--dev` flag and no profile switch inside a single manifest: the
+# distinction lives in *which file you name*, so it is visible at the call
+# site instead of hidden in a mode. Publishing-oriented stacks keep the plain
+# `repolith.toml`; a stack that clones from a remote would point `path`
+# somewhere under `~/.repolith/src` there and here at the local workspace.
+#
+# Switching between the two rebuilds once — the profile is part of the input
+# hash, so repolith knows the installed binary came from the other one.
+
+[orchestrator]
+schema_version = "0.1"
+name = "repolith-dev"
+
+[[node]]
+id = "repolith"
+path = "crates/repolith-cli"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "repolith"
+  profile = "dev"
+  install_to = "~/.cargo"

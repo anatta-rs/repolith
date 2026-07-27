@@ -41,6 +41,7 @@ fn make_action(install_to: PathBuf, features: Vec<String>) -> CargoInstall {
         },
         crate_name: Some("hello-world".to_string()),
         package: None,
+        profile: None,
         features,
         install_to,
         deps: vec![],
@@ -127,6 +128,7 @@ fn action_at(source: PathBuf, install_to: PathBuf) -> CargoInstall {
         source: CargoSource::Path { path: source },
         crate_name: Some("hello-world".to_string()),
         package: None,
+        profile: None,
         features: vec![],
         install_to,
         deps: vec![],
@@ -230,4 +232,44 @@ async fn input_hash_distinguishes_the_selected_package() {
 
     assert_ne!(ha, hb, "different packages must hash differently");
     assert_ne!(ha, hn, "selecting a package must differ from not selecting");
+}
+
+/// The profile changes the artifact but not its install path, so
+/// `output_present` cannot distinguish release from debug. Only the hash
+/// can — without this, switching profiles would report `up to date` with
+/// the wrong binary installed (issue #82).
+#[tokio::test]
+async fn input_hash_distinguishes_the_build_profile() {
+    let src = writable_fixture();
+    let install = TempDir::new().expect("tempdir");
+
+    let release = action_at(src.path().to_path_buf(), install.path().to_path_buf());
+    let mut dev = action_at(src.path().to_path_buf(), install.path().to_path_buf());
+    dev.profile = Some("dev".to_string());
+    let mut custom = action_at(src.path().to_path_buf(), install.path().to_path_buf());
+    custom.profile = Some("release-lto".to_string());
+
+    let hr = release.input_hash(&fresh_ctx()).await.expect("hash");
+    let hd = dev.input_hash(&fresh_ctx()).await.expect("hash");
+    let hc = custom.input_hash(&fresh_ctx()).await.expect("hash");
+
+    assert_ne!(hr, hd, "release and dev must hash differently");
+    assert_ne!(hd, hc, "two named profiles must hash differently");
+}
+
+/// A debug build must actually land a working binary — the profile flag is
+/// passed through to cargo, not silently dropped.
+#[tokio::test]
+async fn dev_profile_installs_a_working_binary() {
+    let tmp = TempDir::new().expect("tempdir");
+    let mut action = make_action(tmp.path().to_path_buf(), vec![]);
+    action.profile = Some("dev".to_string());
+
+    action
+        .execute(&fresh_ctx())
+        .await
+        .expect("install --profile dev");
+    let bin = tmp.path().join("bin").join("hello-world");
+    assert!(bin.is_file(), "expected binary at {bin:?}");
+    assert!(action.output_present(&fresh_ctx()).await);
 }

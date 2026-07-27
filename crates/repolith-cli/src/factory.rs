@@ -136,6 +136,7 @@ fn action_for_entry(
         ActionEntry::CargoInstall {
             crate_name,
             package,
+            profile,
             features,
             install_to,
         } => {
@@ -159,6 +160,7 @@ fn action_for_entry(
                 source,
                 crate_name: crate_name.clone().or_else(|| Some(node.id.clone())),
                 package: package.clone(),
+                profile: profile.clone(),
                 features: features.clone(),
                 install_to: install_to
                     .as_deref()

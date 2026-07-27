@@ -100,6 +100,15 @@ pub enum ActionEntry {
         /// means no positional argument, i.e. cargo's own resolution.
         #[serde(default)]
         package: Option<String>,
+        /// Cargo profile to build with (`--profile`), e.g. `"dev"` for a
+        /// debug build. Absent means cargo's default, which is release.
+        ///
+        /// A debug build skips optimisation and is dramatically faster to
+        /// produce — the right choice when iterating on a local `path`
+        /// source. The binary is larger and slower at run time; that is the
+        /// trade the field exists to make explicit.
+        #[serde(default)]
+        profile: Option<String>,
         /// Cargo features to enable.
         #[serde(default)]
         features: Vec<String>,
@@ -433,59 +442,101 @@ fn check_docker_tag(tag: &str, node: &str) -> Result<(), ManifestError> {
 /// Split out of [`Manifest::validate`] so that function stays under the
 /// workspace's `clippy::too_many_lines` threshold — same reason
 /// `classify` lives outside `Plan::compute`.
+/// Argv guards for `cargo-install`: every field here ends up on cargo's
+/// command line, so each one is checked for flag smuggling and for the
+/// separators cargo would split on.
+fn check_cargo_install(
+    node: &NodeEntry,
+    crate_name: Option<&String>,
+    package: Option<&String>,
+    profile: Option<&String>,
+    features: &[String],
+) -> Result<(), ManifestError> {
+    if let Some(name) = crate_name {
+        check_no_leading_dash(name, &node.id, "crate")?;
+        if name.contains(',') {
+            return Err(ManifestError::InvalidArg {
+                node: node.id.clone(),
+                reason: format!(
+                    "`crate` name `{name}` contains `,` which would split cargo's --features list"
+                ),
+            });
+        }
+    }
+    // `package` becomes cargo's positional argument, so
+    // the same argv guards apply. A leading dash would be
+    // read as a flag; `@` would be parsed as the version
+    // spec of `CRATE@VER` and silently select something
+    // else.
+    if let Some(pkg) = package {
+        check_no_leading_dash(pkg, &node.id, "package")?;
+        if pkg.is_empty() {
+            return Err(ManifestError::InvalidArg {
+                node: node.id.clone(),
+                reason: "`package` is empty".to_string(),
+            });
+        }
+        if pkg.contains('@') {
+            return Err(ManifestError::InvalidArg {
+                node: node.id.clone(),
+                reason: format!(
+                    "`package` `{pkg}` contains `@`, which cargo parses as a version spec (`CRATE@VER`)"
+                ),
+            });
+        }
+    }
+    // `profile` reaches cargo as `--profile <NAME>`. Cargo profile
+    // names are identifier-like, so anything outside that charset is
+    // either a typo or an attempt to smuggle an argument.
+    if let Some(prof) = profile {
+        check_no_leading_dash(prof, &node.id, "profile")?;
+        if prof.is_empty() {
+            return Err(ManifestError::InvalidArg {
+                node: node.id.clone(),
+                reason: "`profile` is empty".to_string(),
+            });
+        }
+        if let Some(c) = prof
+            .chars()
+            .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-')))
+        {
+            return Err(ManifestError::InvalidArg {
+                node: node.id.clone(),
+                reason: format!(
+                    "`profile` `{prof}` contains `{c}` — allowed charset is [a-zA-Z0-9_-]"
+                ),
+            });
+        }
+    }
+    for feature in features {
+        check_no_leading_dash(feature, &node.id, "features entry")?;
+        if feature.contains(',') {
+            return Err(ManifestError::InvalidArg {
+                node: node.id.clone(),
+                reason: format!(
+                    "feature `{feature}` contains `,` which would split cargo's --features list"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn check_action(node: &NodeEntry, action: &ActionEntry) -> Result<(), ManifestError> {
     match action {
         ActionEntry::CargoInstall {
             crate_name,
             package,
+            profile,
             features,
             ..
-        } => {
-            if let Some(name) = crate_name {
-                check_no_leading_dash(name, &node.id, "crate")?;
-                if name.contains(',') {
-                    return Err(ManifestError::InvalidArg {
-                        node: node.id.clone(),
-                        reason: format!(
-                            "`crate` name `{name}` contains `,` which would split cargo's --features list"
-                        ),
-                    });
-                }
-            }
-            // `package` becomes cargo's positional argument, so
-            // the same argv guards apply. A leading dash would be
-            // read as a flag; `@` would be parsed as the version
-            // spec of `CRATE@VER` and silently select something
-            // else.
-            if let Some(pkg) = package {
-                check_no_leading_dash(pkg, &node.id, "package")?;
-                if pkg.is_empty() {
-                    return Err(ManifestError::InvalidArg {
-                        node: node.id.clone(),
-                        reason: "`package` is empty".to_string(),
-                    });
-                }
-                if pkg.contains('@') {
-                    return Err(ManifestError::InvalidArg {
-                        node: node.id.clone(),
-                        reason: format!(
-                            "`package` `{pkg}` contains `@`, which cargo parses as a version spec (`CRATE@VER`)"
-                        ),
-                    });
-                }
-            }
-            for feature in features {
-                check_no_leading_dash(feature, &node.id, "features entry")?;
-                if feature.contains(',') {
-                    return Err(ManifestError::InvalidArg {
-                        node: node.id.clone(),
-                        reason: format!(
-                            "feature `{feature}` contains `,` which would split cargo's --features list"
-                        ),
-                    });
-                }
-            }
-        }
+        } => check_cargo_install(
+            node,
+            crate_name.as_ref(),
+            package.as_ref(),
+            profile.as_ref(),
+            features,
+        )?,
         ActionEntry::Docker {
             tag,
             dockerfile,

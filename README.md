@@ -187,6 +187,7 @@ Every field is optional:
 kind = "cargo-install"
 crate = "migrate"              # default: the node's `id` — the BINARY name
 package = "migration-tools"    # default: none — see below
+profile = "dev"                # default: none → cargo's default, release
 features = ["postgres", "tls"] # default: none
 install_to = "~/.local/bin"    # default: ~/.repolith/bin (`~` expands at run time)
 ```
@@ -206,6 +207,20 @@ Please specify a package, e.g. `cargo install --git <url> bin_only`
 
 Leave it out unless you hit that error; omitting it lets cargo resolve on its
 own, which is right for single-package sources.
+
+`profile` picks the cargo profile (`--profile`) — `dev`, or any profile your
+`Cargo.toml` defines. Useful for keeping debug symbols, or for a custom
+profile such as one with thin LTO.
+
+Do not expect a large build-time win from `dev`. Measured on this repository,
+cold and without a compiler cache: **26.8 s release against 25.0 s dev — 7 %**,
+for a binary **3.5× larger** (11 MB → 39 MB) and **1.8× more** build
+artifacts. Crates whose build is dominated by optimisation will differ; many
+are dominated by C dependencies and proc macros, which the profile does not
+touch. Measure before assuming.
+
+Switching profiles re-installs: the profile is part of the input hash, since
+both land the binary at the same path and nothing else could tell them apart.
 
 **`kind = "docker"`** — `docker build` an image from the node's checkout
 (build-only: running containers stays out of scope, see
@@ -244,6 +259,58 @@ and Ctrl-C cancels every level down to the subprocess groups. The
 
 Actions on the same node run **in declaration order**; independent nodes run
 **in parallel**.
+
+## Published version vs working copy
+
+Two things you may want from the same stack: install what is **released**, or
+install what you are **editing right now**. repolith has no `--dev` flag for
+this — the distinction is which manifest you name, so it stays visible at the
+call site instead of hidden in a mode:
+
+```bash
+repolith sync                                 # ./repolith.toml — the published thing
+repolith sync --manifest repolith.dev.toml    # your working copy, debug build
+```
+
+This repository ships both as a worked example. The pair usually differs in
+two places: `path` (a checkout repolith owns, versus your workspace) and
+`profile` (release versus `dev`). Switching between them rebuilds once —
+expected, since the profile is part of the input hash.
+
+One trap worth stating: a node with a `git-clone` action **resets its
+checkout** (`git fetch` + `git reset --hard`). Never point such a node at a
+directory you work in; keep those under something like `~/.repolith/src` and
+let the dev manifest be the one that reads your workspace.
+
+## Faster rebuilds with sccache
+
+repolith runs `cargo install`, and cargo builds each install in a throwaway
+directory — so nothing is reused between syncs out of the box. A shared
+compiler cache fixes that, and the difference is not subtle. Measured on a
+small binary crate: **7.4 s cold, 1.1 s warm**.
+
+[sccache](https://github.com/mozilla/sccache) is the simplest way there:
+
+```bash
+cargo install sccache --locked
+```
+
+```toml
+# ~/.cargo/config.toml — applies to every cargo invocation, repolith included
+[build]
+rustc-wrapper = "sccache"
+
+# sccache cannot cache incremental compilation; leave it off or it silently
+# stops helping.
+[profile.dev]
+incremental = false
+```
+
+Cap the cache so it cannot grow without bound (`SCCACHE_CACHE_SIZE="10G"`),
+and know the limits before expecting miracles: crates with procedural macros
+are not cacheable, so the Rust hit rate is always partial. `sccache
+--show-stats` reports per-server-session counters that reset when the server
+idles out — the on-disk cache survives, only the numbers restart.
 
 ## Cache backends
 
