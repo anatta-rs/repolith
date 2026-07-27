@@ -16,7 +16,7 @@ readme.workspace = true
 workspace = true
 
 [dependencies]
-repolith-core = { path = "../repolith-core", version = "0.0.9" }
+repolith-core = { path = "../repolith-core", version = "0.0.10" }
 async-trait = "0.1"
 thiserror = "2.0"
 rusqlite = { version = "0.31", features = ["bundled"] }
