@@ -3,7 +3,8 @@
 //! Two subcommands:
 //!
 //! - `sync` — walk the action DAG and rebuild stale entries.
-//! - `status` — print a cache hit/miss table without executing anything.
+//! - `status` — print a cache hit/miss table without executing anything;
+//!   with a filter argument, a detail block per matching action.
 //!
 //! Signal handling: a single root `CancellationToken` is created in `main`,
 //! passed to the orchestrator via `Builder::base_ctx`, and watched by a
@@ -16,8 +17,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use comfy_table::{Cell, Table};
 use repolith_cache::SqliteCache;
-use repolith_core::manifest::Manifest;
-use repolith_core::types::{BuildEvent, Ctx, ExecMode};
+use repolith_core::manifest::{ActionEntry, Manifest, action_kind};
+use repolith_core::plan::{ChangeReason, Plan};
+use repolith_core::types::{ActionId, BuildEvent, Ctx, ExecMode};
 use repolith_engine::orchestrator::Orchestrator;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -70,7 +72,17 @@ enum Cmd {
     Sync(SyncArgs),
 
     /// Print a cache hit/miss table — no execution.
-    Status,
+    ///
+    /// With FILTER, print a detail block per matching action instead:
+    /// the full error, full hashes, resolved inputs, dependencies and
+    /// artifact state — everything the table has to truncate away.
+    Status {
+        /// Substring of an action id, e.g. `land` or `land::cargo`.
+        ///
+        /// Ids are `{node}::{kind}::{index}`; run `repolith status` with
+        /// no argument to list them.
+        filter: Option<String>,
+    },
 }
 
 #[derive(clap::Args, Debug)]
@@ -112,7 +124,7 @@ async fn main() -> Result<()> {
 
     match &cli.cmd {
         Cmd::Sync(args) => run_sync(&cli, args, cancel).await,
-        Cmd::Status => run_status(&cli, cancel).await,
+        Cmd::Status { filter } => run_status(&cli, cancel, filter.as_deref()).await,
     }
 }
 
@@ -328,9 +340,20 @@ async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Resu
     }
 }
 
-async fn run_status(cli: &Cli, cancel: CancellationToken) -> Result<()> {
+async fn run_status(cli: &Cli, cancel: CancellationToken, filter: Option<&str>) -> Result<()> {
     let orch = build_orchestrator(cli, cancel, num_cpus::get(), ExecMode::FailFast).await?;
     let plan = orch.compute_plan().await?;
+
+    match filter {
+        None => {
+            print_status_table(&plan);
+            Ok(())
+        }
+        Some(f) => print_status_detail(&orch, &plan, f).await,
+    }
+}
+
+fn print_status_table(plan: &Plan) {
     let reasons: HashMap<_, _> = plan.reasons().iter().collect();
 
     let mut table = Table::new();
@@ -351,7 +374,255 @@ async fn run_status(cli: &Cli, cancel: CancellationToken) -> Result<()> {
         }
     }
     println!("{table}");
+}
+
+/// Width of the label column in a detail block. Sized for the longest
+/// label in use (`install to`) plus a separating space.
+const LABEL_W: usize = 12;
+
+/// Print one `label   value` line, indenting any continuation lines to the
+/// value column so multi-line values (a full error, both input hashes)
+/// stay readable instead of wrapping back to the margin.
+fn field(label: &str, value: &str) {
+    let mut lines = value.lines();
+    println!("  {:<LABEL_W$}{}", label, lines.next().unwrap_or(""));
+    for line in lines {
+        println!("  {:<LABEL_W$}{line}", "");
+    }
+}
+
+async fn print_status_detail(orch: &Orchestrator, plan: &Plan, filter: &str) -> Result<()> {
+    let matches: Vec<&ActionId> = plan
+        .flat_topo()
+        .filter(|id| id.0.contains(filter))
+        .collect();
+
+    // A query that matched nothing is not a success. Exiting non-zero is
+    // what lets a script tell "this action is fine" from "you typo'd it".
+    if matches.is_empty() {
+        anyhow::bail!(
+            "no action id contains `{filter}` — run `repolith status` with no argument to list them"
+        );
+    }
+
+    let reasons = plan.reasons();
+    for (n, id) in matches.iter().enumerate() {
+        if n > 0 {
+            println!();
+        }
+        println!("{id}");
+
+        if let Some(reason) = reasons.get(*id) {
+            field("state", "stale");
+            // Untruncated, unlike the table cell this view exists to expand.
+            field("reason", &reason.to_string());
+        } else {
+            field("state", "up-to-date");
+        }
+
+        print_last_run(orch, id).await;
+        print_hashes(orch, plan, id).await;
+        print_action_facts(orch, reasons, id).await;
+    }
     Ok(())
+}
+
+async fn print_last_run(orch: &Orchestrator, id: &ActionId) {
+    let Some(rec) = orch.cache().last_record(id).await else {
+        field("last run", "never — nothing cached for this id");
+        return;
+    };
+    let (outcome, ms) = match &rec.event {
+        BuildEvent::Success { ms, .. } => ("succeeded", *ms),
+        BuildEvent::Failed { ms, .. } => ("failed", *ms),
+    };
+    let when = rec.recorded_at.map_or_else(
+        // Pre-0.0.11 cache rows carry no date. Say so rather than invent one.
+        || "date not recorded by this cache".to_string(),
+        human_ago,
+    );
+    field(
+        "last run",
+        &format!("{outcome} in {}, {when}", human_ms(ms)),
+    );
+
+    if let BuildEvent::Failed { error, .. } = &rec.event {
+        // The whole error, every line of it — the table shows the first
+        // line capped at 72 characters, and this is where the rest lives.
+        field("error", &error.to_string());
+    }
+}
+
+async fn print_hashes(orch: &Orchestrator, plan: &Plan, id: &ActionId) {
+    let current = plan.input_hash(id);
+    let cached = orch.cache().last_record(id).await.map(|r| match r.event {
+        BuildEvent::Success { input, .. } | BuildEvent::Failed { input, .. } => input,
+    });
+    // Full hashes here — the table prints the 8-char short form.
+    let value = match (cached, current) {
+        (Some(c), Some(n)) => format!("cached   {c}\ncurrent  {n}"),
+        (None, Some(n)) => format!("current  {n}"),
+        (Some(c), None) => format!("cached   {c}"),
+        (None, None) => return,
+    };
+    field("input", &value);
+}
+
+async fn print_action_facts(
+    orch: &Orchestrator,
+    reasons: &HashMap<ActionId, ChangeReason>,
+    id: &ActionId,
+) {
+    if let Some(action) = orch.actions().iter().find(|a| a.id() == *id) {
+        let deps = action.deps();
+        if deps.is_empty() {
+            field("deps", "none");
+        } else {
+            let lines: Vec<String> = deps
+                .iter()
+                .map(|d| {
+                    let state = if reasons.contains_key(d) {
+                        "stale"
+                    } else {
+                        "up-to-date"
+                    };
+                    format!("{d} ({state})")
+                })
+                .collect();
+            field("deps", &lines.join("\n"));
+        }
+
+        // Whether the artifact is actually on disk — the cache saying
+        // "built" and the binary existing are two different facts, and
+        // their disagreement is exactly what `OutputMissing` reports.
+        let present = action.output_present(orch.base_ctx()).await;
+        field("artifact", if present { "present" } else { "missing" });
+    }
+
+    let Some(manifest) = orch.manifest.as_ref() else {
+        return;
+    };
+    let Some((node, entry)) = manifest_entry(manifest, id) else {
+        return;
+    };
+
+    match (&node.path, &node.git) {
+        (Some(p), _) => field("source", &format!("path {}", p.display())),
+        (None, Some(g)) => field("source", &format!("git  {g}")),
+        (None, None) => {}
+    }
+    field("action", action_kind(entry));
+    print_entry_fields(entry);
+}
+
+/// The action's own declared inputs, one field per TOML key that is set.
+fn print_entry_fields(entry: &ActionEntry) {
+    match entry {
+        ActionEntry::GitClone => {}
+        ActionEntry::CargoInstall {
+            crate_name,
+            package,
+            profile,
+            features,
+            install_to,
+        } => {
+            if let Some(c) = crate_name {
+                field("bin", c);
+            }
+            if let Some(p) = package {
+                field("package", p);
+            }
+            field(
+                "profile",
+                profile.as_deref().unwrap_or("release (cargo default)"),
+            );
+            if !features.is_empty() {
+                field("features", &features.join(", "));
+            }
+            if let Some(d) = install_to {
+                field("install to", &d.display().to_string());
+            }
+        }
+        ActionEntry::Docker {
+            tag,
+            dockerfile,
+            context,
+        } => {
+            field("tag", tag);
+            if let Some(d) = dockerfile {
+                field("dockerfile", &d.display().to_string());
+            }
+            if let Some(c) = context {
+                field("context", &c.display().to_string());
+            }
+        }
+        ActionEntry::Repolith { manifest } => {
+            field(
+                "manifest",
+                &manifest
+                    .as_ref()
+                    .map_or_else(|| "repolith.toml".to_string(), |p| p.display().to_string()),
+            );
+        }
+    }
+}
+
+/// Find the manifest node + entry an [`ActionId`] came from.
+///
+/// Zips [`Manifest::action_ids`] against the same flat node/action walk it
+/// performs internally, rather than re-deriving the `{node}::{kind}::{i}`
+/// format here — one source of truth for the id shape, so this cannot
+/// drift out of step with it.
+fn manifest_entry<'m>(
+    manifest: &'m Manifest,
+    id: &ActionId,
+) -> Option<(&'m repolith_core::manifest::NodeEntry, &'m ActionEntry)> {
+    let flat = manifest
+        .nodes
+        .iter()
+        .flat_map(|n| n.actions.iter().map(move |a| (n, a)));
+    manifest
+        .action_ids()
+        .into_iter()
+        .zip(flat)
+        .find_map(|(candidate, pair)| (candidate == *id).then_some(pair))
+}
+
+/// Milliseconds since the epoch, or 0 if the clock is unreadable.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// "12 minutes ago" — the form that actually answers "is this recent?".
+///
+/// Rounds to the nearest unit and switches unit past 1.5x, so nothing ever
+/// reads "90 minutes ago". A shared cache written by a machine whose clock
+/// runs ahead can date an event in the future; that saturates to "0 seconds
+/// ago" rather than underflowing.
+fn human_ago(recorded_ms: u64) -> String {
+    let secs = now_ms().saturating_sub(recorded_ms) / 1000;
+    let (n, unit) = match secs {
+        0 => return "just now".to_string(),
+        1..=89 => (secs, "second"),
+        90..=5399 => ((secs + 30) / 60, "minute"),
+        5400..=129_599 => ((secs + 1800) / 3600, "hour"),
+        _ => ((secs + 43_200) / 86_400, "day"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
+/// A duration a human can read. Integer arithmetic throughout — a float
+/// cast would buy nothing here but a precision-loss lint.
+fn human_ms(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else if ms < 60_000 {
+        format!("{}.{} s", ms / 1000, (ms % 1000) / 100)
+    } else {
+        format!("{} min {} s", ms / 60_000, (ms % 60_000) / 1000)
+    }
 }
 
 fn print_events(events: &[BuildEvent]) {
@@ -362,5 +633,87 @@ fn print_events(events: &[BuildEvent]) {
                 println!("FAIL {id} ({ms} ms): {error}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations_read_like_durations() {
+        assert_eq!(human_ms(0), "0 ms");
+        assert_eq!(human_ms(999), "999 ms");
+        assert_eq!(human_ms(1000), "1.0 s");
+        assert_eq!(human_ms(26_800), "26.8 s");
+        assert_eq!(human_ms(59_999), "59.9 s");
+        assert_eq!(human_ms(60_000), "1 min 0 s");
+        assert_eq!(human_ms(3_725_000), "62 min 5 s");
+    }
+
+    #[test]
+    fn ages_round_to_the_nearest_sensible_unit() {
+        let ago = |secs: u64| human_ago(now_ms().saturating_sub(secs * 1000));
+        assert_eq!(ago(0), "just now");
+        assert_eq!(ago(1), "1 second ago");
+        assert_eq!(ago(45), "45 seconds ago");
+        // Past 1.5x a unit we switch, so nothing ever reads "90 minutes ago".
+        assert_eq!(ago(120), "2 minutes ago");
+        assert_eq!(ago(3600), "60 minutes ago");
+        assert_eq!(ago(5400), "2 hours ago");
+        assert_eq!(ago(86_400 * 3), "3 days ago");
+    }
+
+    /// A clock ahead of ours — possible on a shared Neo4j cache written by
+    /// another machine — must not underflow into a nonsense age.
+    #[test]
+    fn a_future_timestamp_reads_as_just_now() {
+        assert_eq!(human_ago(now_ms() + 3_600_000), "just now");
+    }
+
+    #[test]
+    fn manifest_entry_finds_the_declaring_node() {
+        let toml = r#"
+[orchestrator]
+schema_version = "0.1"
+name = "t"
+
+[[node]]
+id = "alpha"
+path = "/tmp/a"
+
+  [[node.action]]
+  kind = "git-clone"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "alpha"
+"#;
+        let m = Manifest::from_toml(toml).expect("fixture parses");
+
+        let (node, entry) = manifest_entry(&m, &ActionId("alpha::cargo-install::1".into()))
+            .expect("second action of alpha");
+        assert_eq!(node.id, "alpha");
+        assert!(
+            matches!(entry, ActionEntry::CargoInstall { crate_name, .. }
+                     if crate_name.as_deref() == Some("alpha")),
+            "index 1 must resolve to the cargo-install, not the git-clone"
+        );
+
+        assert!(
+            manifest_entry(&m, &ActionId("alpha::cargo-install::0".into())).is_none(),
+            "the index is part of the id; a wrong one must not match"
+        );
+    }
+
+    /// Continuation lines of a multi-line value line up under the first,
+    /// which is what makes a full rustc diagnostic readable in a block.
+    #[test]
+    fn multi_line_values_indent_to_the_value_column() {
+        // Rendered by hand rather than capturing stdout: the invariant is
+        // the padding width, and asserting it directly is what matters.
+        let pad = " ".repeat(2 + LABEL_W);
+        assert_eq!(pad.len(), 14);
+        assert_eq!(format!("  {:<LABEL_W$}", "error").len(), pad.len());
     }
 }

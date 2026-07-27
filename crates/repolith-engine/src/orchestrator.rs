@@ -114,6 +114,33 @@ impl Orchestrator {
         Plan::compute(&self.actions, self.cache.as_ref(), &self.base_ctx).await
     }
 
+    /// The registered actions, in registration order.
+    ///
+    /// Read-only, for consumers that need to describe the graph a `Plan`
+    /// was computed from — `repolith status <filter>` reports each action's
+    /// dependencies and whether its artifact is on disk. Rebuilding the
+    /// action set from the manifest a second time would risk describing a
+    /// *different* graph than the one that was planned.
+    #[must_use]
+    pub fn actions(&self) -> &[Box<dyn Action>] {
+        &self.actions
+    }
+
+    /// The cache this orchestrator plans against.
+    ///
+    /// Read-only: the query methods ([`Cache::last_record`]) are the point;
+    /// writes stay the orchestrator's business.
+    #[must_use]
+    pub fn cache(&self) -> &dyn Cache {
+        self.cache.as_ref()
+    }
+
+    /// The context every action is executed with.
+    #[must_use]
+    pub fn base_ctx(&self) -> &Ctx {
+        &self.base_ctx
+    }
+
     /// Execute every stale action in the plan, layer by layer.
     ///
     /// Returns the chronological list of `BuildEvent`s recorded across all

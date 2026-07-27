@@ -152,6 +152,41 @@ https://github.com/anatta-rs/repolith && cargo build --release`.
 `repolith sync -k` keeps a layer running after a failure (useful for
 surfacing every failure of a layer in one pass).
 
+### Drilling into one action
+
+The table has to keep every reason inside a cell, so it shows the first
+line of an error capped at 72 characters. Pass any substring of an action
+id to get the rest:
+
+```bash
+repolith status land              # every action of the `land` node
+repolith status land::cargo       # just its cargo-install
+```
+
+```text
+land::cargo-install::1
+  state       stale
+  reason      previous run failed: command failed (exit 101): error[E0308]…
+  last run    failed in 3.4 s, 12 minutes ago
+  error       command failed (exit 101): error[E0308]: mismatched types
+                --> src/main.rs:1:26
+                 |
+               1 | fn main() { let x: i32 = "not an integer"; }
+                 |                    ---   ^^^^^^^^^^^^^^^^ expected `i32`
+  input       cached   e91d8f27811ed38c4e5508b3d02095b3e31235c59945e70c22…
+              current  e91d8f27811ed38c4e5508b3d02095b3e31235c59945e70c22…
+  deps        land::git-clone::0 (up-to-date)
+  artifact    missing
+  source      path /Users/you/projects/land
+  action      cargo-install
+  package     land
+  profile     release (cargo default)
+```
+
+Action ids are `{node}::{kind}::{index}` and are stable — they are the
+cache keys. A filter that matches nothing exits non-zero, so a typo is
+never mistaken for a healthy action.
+
 See [`repolith.toml.example`](repolith.toml.example) for a full annotated
 manifest.
 
