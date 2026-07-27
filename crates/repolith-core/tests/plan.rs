@@ -217,7 +217,9 @@ async fn test_cascade_upstream_moved() {
 
 #[tokio::test]
 async fn test_failed_prior_rebuilds() {
-    // Cached BuildEvent::Failed → must always re-run as NoCachedBuild
+    // Cached BuildEvent::Failed → must always re-run. Since #86 the reason
+    // names the failure instead of pretending the action never ran, but the
+    // planning decision — stale, re-run — is unchanged.
     let actions = boxed(vec![StubAction::new("A", &[], 0x01)]);
     let cache = MockCache::new().with_event(BuildEvent::Failed {
         id: aid("A"),
@@ -226,10 +228,15 @@ async fn test_failed_prior_rebuilds() {
         ms: 1,
     });
     let plan = Plan::compute(&actions, &cache, &ctx()).await.unwrap();
-    assert_eq!(
-        plan.reasons().get(&aid("A")),
-        Some(&ChangeReason::NoCachedBuild)
+    assert!(
+        matches!(
+            plan.reasons().get(&aid("A")),
+            Some(ChangeReason::PreviousFailure { .. })
+        ),
+        "got {:?}",
+        plan.reasons().get(&aid("A"))
     );
+    assert_eq!(plan.reasons().len(), 1, "still stale, still re-runs");
 }
 
 #[tokio::test]
@@ -412,4 +419,99 @@ async fn changed_hash_outranks_missing_artifact() {
         "got {:?}",
         plan.reasons().get(&aid("a"))
     );
+}
+
+// ---------------------------------------------------------------------------
+// PreviousFailure + Display — status must say what went wrong (issue #86)
+// ---------------------------------------------------------------------------
+
+/// A recorded failure must be reported as such, **and** still re-run. The
+/// label changes; the planning decision does not.
+#[tokio::test]
+async fn prior_failure_is_named_and_still_stale() {
+    let cache = MockCache::new().with_event(BuildEvent::Failed {
+        id: aid("a"),
+        input: Sha256([1; 32]),
+        error: BuildError::CommandFailed {
+            exit_code: 101,
+            stderr: "error: does not contain a Cargo.toml file".to_string(),
+        },
+        ms: 5,
+    });
+
+    let plan = Plan::compute(&boxed(vec![StubAction::new("a", &[], 1)]), &cache, &ctx())
+        .await
+        .expect("plan");
+
+    match plan.reasons().get(&aid("a")) {
+        Some(ChangeReason::PreviousFailure { error }) => {
+            assert!(
+                error.contains("Cargo.toml"),
+                "the recorded stderr must survive, got: {error}"
+            );
+        }
+        other => panic!("expected PreviousFailure, got {other:?}"),
+    }
+    assert_eq!(plan.reasons().len(), 1, "and it must still be stale");
+}
+
+/// No cache entry is a different situation from a recorded failure.
+#[tokio::test]
+async fn absent_entry_is_still_no_cached_build() {
+    let plan = Plan::compute(
+        &boxed(vec![StubAction::new("a", &[], 1)]),
+        &MockCache::new(),
+        &ctx(),
+    )
+    .await
+    .expect("plan");
+
+    assert_eq!(
+        plan.reasons().get(&aid("a")),
+        Some(&ChangeReason::NoCachedBuild)
+    );
+}
+
+#[test]
+fn display_is_short_and_readable() {
+    // The bug: Debug dumped a 32-byte array per hash and blew the table to
+    // ~400 columns. Display must stay table-sized.
+    let changed = ChangeReason::InputHashChanged {
+        from: Sha256([0; 32]),
+        to: Sha256([255; 32]),
+    };
+    let s = changed.to_string();
+    assert_eq!(s, "inputs changed (00000000 -> ffffffff)");
+    assert!(s.len() < 60, "must fit a table cell, got {} chars", s.len());
+
+    assert_eq!(ChangeReason::NoCachedBuild.to_string(), "never built");
+    assert_eq!(ChangeReason::OutputMissing.to_string(), "artifact missing");
+    assert_eq!(
+        ChangeReason::UpstreamMoved {
+            dep: aid("dep::x::0")
+        }
+        .to_string(),
+        "upstream dep::x::0 is stale"
+    );
+}
+
+#[test]
+fn multiline_failure_is_truncated_to_one_line() {
+    let reason = ChangeReason::PreviousFailure {
+        error: "error: the real message\n  --> context line\n  note: more".to_string(),
+    };
+    let s = reason.to_string();
+    assert!(s.contains("the real message"), "keeps the first line: {s}");
+    assert!(!s.contains("context line"), "drops the rest: {s}");
+    assert!(!s.contains('\n'), "single line for a table cell: {s}");
+}
+
+#[test]
+fn very_long_failure_is_capped() {
+    let reason = ChangeReason::PreviousFailure {
+        error: "x".repeat(300),
+    };
+    let s = reason.to_string();
+    assert!(s.len() < 110, "capped, got {} chars", s.len());
+    assert!(s.ends_with("..."), "signals truncation: {s}");
 }

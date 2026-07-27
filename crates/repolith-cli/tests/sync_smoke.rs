@@ -81,7 +81,7 @@ fn cascade_node_a_changed() {
         "node-a git-clone action must be flagged stale:\n{stdout}"
     );
     assert!(
-        stdout.contains("InputHashChanged"),
+        stdout.contains("inputs changed"),
         "stale reason must be InputHashChanged:\n{stdout}"
     );
     // b and c are independent of a in this manifest (no cross-node deps in

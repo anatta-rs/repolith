@@ -305,7 +305,7 @@ async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Resu
             println!("up to date — no stale actions");
         } else {
             for (id, reason) in plan.reasons() {
-                println!("• {id}: {reason:?}");
+                println!("• {id}: {reason}");
             }
         }
     }
@@ -340,7 +340,7 @@ async fn run_status(cli: &Cli, cancel: CancellationToken) -> Result<()> {
             table.add_row(vec![
                 Cell::new(id.to_string()),
                 Cell::new("stale"),
-                Cell::new(format!("{reason:?}")),
+                Cell::new(reason.to_string()),
             ]);
         } else {
             table.add_row(vec![
