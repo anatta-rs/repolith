@@ -112,6 +112,63 @@ async fn run_contract_suite(cache: &mut dyn Cache, ns: &str) {
 
     // 7. Empty batch is a no-op, not an error.
     cache.record_batch(vec![]).await.expect("empty batch ok");
+
+    // 8. A freshly written event is dated, and the date is a real one.
+    //
+    // The window is deliberately loose (a minute either side). Every failure
+    // this guards against — storing 0, storing the duration in the timestamp
+    // column, storing nothing — is off by decades, so a tight window would
+    // only buy flakiness under clock skew between this process and a remote
+    // Neo4j server.
+    let before = now_ms();
+    cache
+        .record(success(&id("dated").0, 5))
+        .await
+        .expect("record dated");
+    let rec = cache
+        .last_record(&id("dated"))
+        .await
+        .expect("record must be readable");
+    let at = rec
+        .recorded_at
+        .expect("a backend that just wrote an event must be able to date it");
+    assert!(
+        at.abs_diff(before) < 60_000,
+        "recorded_at {at} is not a plausible now ({before}); \
+         a zero, an epoch date or a duration-in-timestamp bug looks exactly like this"
+    );
+
+    // 9. `last_record` and `last_build` never disagree about the event.
+    //    They share one read path per backend; this pins that they must.
+    let via_build = cache
+        .last_build(&id("dated"))
+        .await
+        .expect("event must be readable");
+    match (&rec.event, &via_build) {
+        (
+            BuildEvent::Success {
+                ms: a, input: ia, ..
+            },
+            BuildEvent::Success {
+                ms: b, input: ib, ..
+            },
+        ) => {
+            assert_eq!(a, b, "duration must not differ between the two read paths");
+            assert_eq!(*a, 5, "dating an event must not disturb its duration");
+            assert_eq!(ia, ib, "input hash must not differ between read paths");
+        }
+        other => panic!("both read paths must yield the same Success: {other:?}"),
+    }
+}
+
+fn now_ms() -> u64 {
+    u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_millis(),
+    )
+    .expect("epoch millis fit in u64")
 }
 
 #[tokio::test]
@@ -125,6 +182,60 @@ async fn sqlite_file_backed_satisfies_the_contract() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut cache = SqliteCache::open(dir.path().join("contract.db")).expect("open");
     run_contract_suite(&mut cache, "run").await;
+}
+
+/// A backend that implements only the required methods, to pin the trait's
+/// default `last_record` body — no shipped backend exercises it, but any
+/// third-party implementation gets it for free and must not be surprised.
+mod default_impl {
+    use async_trait::async_trait;
+    use repolith_cache::Cache;
+    use repolith_core::cache::Result;
+    use repolith_core::types::{ActionId, BuildEvent, Sha256};
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct TimelessCache(HashMap<String, BuildEvent>);
+
+    #[async_trait]
+    impl Cache for TimelessCache {
+        async fn last_build(&self, id: &ActionId) -> Option<BuildEvent> {
+            self.0.get(&id.0).cloned()
+        }
+        async fn record(&mut self, event: BuildEvent) -> Result<()> {
+            let id = match &event {
+                BuildEvent::Success { id, .. } | BuildEvent::Failed { id, .. } => id.0.clone(),
+            };
+            self.0.insert(id, event);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn undated_backend_reports_absence_not_zero() {
+        let mut cache = TimelessCache::default();
+        let id = ActionId("a::b::0".to_string());
+        cache
+            .record(BuildEvent::Success {
+                id: id.clone(),
+                input: Sha256([1; 32]),
+                output: Sha256([2; 32]),
+                ms: 11,
+            })
+            .await
+            .expect("record");
+
+        let rec = cache.last_record(&id).await.expect("event is readable");
+        assert!(
+            rec.recorded_at.is_none(),
+            "a backend that tracks no write time must say None, never Some(0) — \
+             callers render absence, and Some(0) would print a 1970 date"
+        );
+        assert!(
+            matches!(rec.event, BuildEvent::Success { ms: 11, .. }),
+            "the default impl must pass the event through untouched"
+        );
+    }
 }
 
 #[cfg(feature = "neo4j")]

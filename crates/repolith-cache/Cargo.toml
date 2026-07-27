@@ -32,3 +32,6 @@ neo4j = ["dep:neo4rs"]
 [dev-dependencies]
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
 tempfile = "3"
+# Integration tests implement `Cache` themselves to pin the trait's
+# default method bodies, which no shipped backend exercises.
+async-trait = "0.1"

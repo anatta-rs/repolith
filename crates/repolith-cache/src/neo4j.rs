@@ -24,7 +24,7 @@
 use async_trait::async_trait;
 use neo4rs::{Graph, query};
 use repolith_core::cache::{Cache, CacheError, Result};
-use repolith_core::types::{ActionId, BuildError, BuildEvent, Sha256};
+use repolith_core::types::{ActionId, BuildError, BuildEvent, BuildRecord, Sha256};
 use std::time::Duration;
 
 /// Upper bound on the initial connectivity check.
@@ -180,13 +180,15 @@ fn parse_sha256(s: &str) -> Option<Sha256> {
     Some(Sha256(arr))
 }
 
-#[async_trait]
-impl Cache for Neo4jCache {
-    async fn last_build(&self, id: &ActionId) -> Option<BuildEvent> {
+impl Neo4jCache {
+    /// The single read path, shared by [`Cache::last_build`] and
+    /// [`Cache::last_record`] so the two can never drift apart.
+    async fn fetch(&self, id: &ActionId) -> Option<BuildRecord> {
         let q = query(
             "MATCH (a:Action {id: $id})-[:LAST]->(e:BuildEvent)
              RETURN e.kind AS kind, e.input AS input, e.output AS output,
-                    e.error_json AS error_json, e.ms AS ms",
+                    e.error_json AS error_json, e.ms AS ms,
+                    e.recorded_at AS recorded_at",
         )
         .param("id", id.0.clone());
         let mut rows = self.graph.execute(q).await.ok()?;
@@ -195,24 +197,43 @@ impl Cache for Neo4jCache {
         let kind: String = row.get("kind").ok()?;
         let input = parse_sha256(&row.get::<String>("input").ok()?)?;
         let ms = u64::try_from(row.get::<i64>("ms").ok()?).unwrap_or(0);
-        if kind == "success" {
+        // Nodes created before `recorded_at` was written have no such
+        // property; a missing or negative value means "unknown", never zero.
+        let recorded_at = row.get::<i64>("recorded_at").ok().and_then(|t| {
+            let t = u64::try_from(t).ok()?;
+            (t != 0).then_some(t)
+        });
+
+        let event = if kind == "success" {
             let output = parse_sha256(&row.get::<String>("output").ok()?)?;
-            Some(BuildEvent::Success {
+            BuildEvent::Success {
                 id: id.clone(),
                 input,
                 output,
                 ms,
-            })
+            }
         } else {
             let error = serde_json::from_str::<BuildError>(&row.get::<String>("error_json").ok()?)
                 .unwrap_or(BuildError::Cancelled);
-            Some(BuildEvent::Failed {
+            BuildEvent::Failed {
                 id: id.clone(),
                 input,
                 error,
                 ms,
-            })
-        }
+            }
+        };
+        Some(BuildRecord { event, recorded_at })
+    }
+}
+
+#[async_trait]
+impl Cache for Neo4jCache {
+    async fn last_build(&self, id: &ActionId) -> Option<BuildEvent> {
+        self.fetch(id).await.map(|r| r.event)
+    }
+
+    async fn last_record(&self, id: &ActionId) -> Option<BuildRecord> {
+        self.fetch(id).await
     }
 
     async fn record(&mut self, event: BuildEvent) -> Result<()> {
