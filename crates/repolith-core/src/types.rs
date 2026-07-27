@@ -116,6 +116,27 @@ pub enum BuildEvent {
     },
 }
 
+/// A [`BuildEvent`] as it came back out of a cache, plus the storage
+/// metadata the cache knows about it.
+///
+/// "When was this stored" is deliberately *not* a field of `BuildEvent`:
+/// the event describes what an action did, and two runs producing the same
+/// hashes are the same event regardless of when they were persisted. Keeping
+/// the timestamp out here also keeps `BuildEvent` equality independent of the
+/// clock, which the planner's tests rely on.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct BuildRecord {
+    /// The event itself.
+    pub event: BuildEvent,
+    /// Milliseconds since the Unix epoch at which the backend stored this
+    /// event, when it knows.
+    ///
+    /// `None` means the backend does not track write times, or the entry
+    /// predates the column being populated — never "epoch zero". Callers
+    /// must render the absence rather than formatting a 1970 date.
+    pub recorded_at: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

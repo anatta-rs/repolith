@@ -10,7 +10,7 @@
 
 use async_trait::async_trait;
 use repolith_core::cache::{Cache, CacheError, Result};
-use repolith_core::types::{ActionId, BuildError, BuildEvent, Sha256};
+use repolith_core::types::{ActionId, BuildError, BuildEvent, BuildRecord, Sha256};
 use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -87,14 +87,13 @@ impl SqliteCache {
             .map_err(|e| CacheError::Backend(format!("set busy_timeout: {e}")))?;
         Ok(())
     }
-}
 
-#[async_trait]
-impl Cache for SqliteCache {
-    async fn last_build(&self, id: &ActionId) -> Option<BuildEvent> {
+    /// The single read path, shared by [`Cache::last_build`] and
+    /// [`Cache::last_record`] so the two can never drift apart.
+    async fn fetch(&self, id: &ActionId) -> Option<BuildRecord> {
         let conn = Arc::clone(&self.conn);
         let id = id.clone();
-        tokio::task::spawn_blocking(move || -> Option<BuildEvent> {
+        tokio::task::spawn_blocking(move || -> Option<BuildRecord> {
             let c = conn.lock().ok()?;
             c.query_row(
                 "SELECT input_hash, output_hash, status, started_at, ended_at, error_json
@@ -107,6 +106,17 @@ impl Cache for SqliteCache {
                     let ended: i64 = row.get(4)?;
                     let ms = u64::try_from((ended - started).max(0)).unwrap_or(0);
 
+                    // `started_at == 0` is the "no write time" marker: it is
+                    // what every row written before this column carried a
+                    // real clock reading looks like, and what `insert_event`
+                    // still falls back to when the clock is unusable. Such a
+                    // row must report absence, never an epoch-zero date.
+                    let recorded_at = if started == 0 {
+                        None
+                    } else {
+                        u64::try_from(ended).ok()
+                    };
+
                     let input = parse_sha256(&input_hex).ok_or_else(|| {
                         rusqlite::Error::InvalidColumnType(
                             0,
@@ -115,7 +125,7 @@ impl Cache for SqliteCache {
                         )
                     })?;
 
-                    Ok(if status == "success" {
+                    let event = if status == "success" {
                         let out_hex: String = row.get(1)?;
                         let output = parse_sha256(&out_hex).ok_or_else(|| {
                             rusqlite::Error::InvalidColumnType(
@@ -141,7 +151,8 @@ impl Cache for SqliteCache {
                             error,
                             ms,
                         }
-                    })
+                    };
+                    Ok(BuildRecord { event, recorded_at })
                 },
             )
             .ok()
@@ -149,6 +160,17 @@ impl Cache for SqliteCache {
         .await
         .ok()
         .flatten()
+    }
+}
+
+#[async_trait]
+impl Cache for SqliteCache {
+    async fn last_build(&self, id: &ActionId) -> Option<BuildEvent> {
+        self.fetch(id).await.map(|r| r.event)
+    }
+
+    async fn last_record(&self, id: &ActionId) -> Option<BuildRecord> {
+        self.fetch(id).await
     }
 
     async fn record(&mut self, ev: BuildEvent) -> Result<()> {
@@ -202,16 +224,12 @@ fn insert_event(conn: &Connection, ev: &BuildEvent) -> Result<()> {
             output,
             ms,
         } => {
+            let (started, ended) = stamps(*ms);
             conn.execute(
                 "INSERT OR REPLACE INTO build_events
                  (action_id, input_hash, output_hash, status, started_at, ended_at, error_json)
-                 VALUES (?1, ?2, ?3, 'success', 0, ?4, NULL)",
-                params![
-                    id.0,
-                    input.to_string(),
-                    output.to_string(),
-                    i64::try_from(*ms).unwrap_or(i64::MAX)
-                ],
+                 VALUES (?1, ?2, ?3, 'success', ?4, ?5, NULL)",
+                params![id.0, input.to_string(), output.to_string(), started, ended],
             )
             .map_err(|e| CacheError::Backend(e.to_string()))?;
         }
@@ -223,16 +241,12 @@ fn insert_event(conn: &Connection, ev: &BuildEvent) -> Result<()> {
         } => {
             let err_json = serde_json::to_string(error)
                 .map_err(|e| CacheError::Backend(format!("serialize error: {e}")))?;
+            let (started, ended) = stamps(*ms);
             conn.execute(
                 "INSERT OR REPLACE INTO build_events
                  (action_id, input_hash, output_hash, status, started_at, ended_at, error_json)
-                 VALUES (?1, ?2, NULL, 'failed', 0, ?3, ?4)",
-                params![
-                    id.0,
-                    input.to_string(),
-                    i64::try_from(*ms).unwrap_or(i64::MAX),
-                    err_json
-                ],
+                 VALUES (?1, ?2, NULL, 'failed', ?3, ?4, ?5)",
+                params![id.0, input.to_string(), started, ended, err_json],
             )
             .map_err(|e| CacheError::Backend(e.to_string()))?;
         }
@@ -240,8 +254,158 @@ fn insert_event(conn: &Connection, ev: &BuildEvent) -> Result<()> {
     Ok(())
 }
 
+/// The `(started_at, ended_at)` pair to store for a build that took `ms`.
+///
+/// Anchored on the wall clock so `ended_at` is a genuine timestamp — the
+/// columns previously held `(0, ms)`, which made them lie about their own
+/// names and left the backend unable to say when anything ran.
+///
+/// The subtraction is deliberate: the reader recovers the duration as
+/// `ended - started`, so anchoring the *end* on the clock keeps that
+/// invariant exactly intact while making the stored end date true. No
+/// migration is needed, and no existing row changes meaning.
+///
+/// A clock that cannot be read, or that places "now" at or before this
+/// build's own duration, is not one we can date anything with. Both degrade
+/// to the legacy `(0, ms)` shape, which the reader already interprets as
+/// "no write time" — so a broken clock costs a missing date, never a wrong
+/// duration and never a 1970 date.
+fn stamps(ms: u64) -> (i64, i64) {
+    let ms = i64::try_from(ms).unwrap_or(i64::MAX);
+    let legacy = (0, ms);
+    let Ok(since_epoch) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return legacy;
+    };
+    let ended = i64::try_from(since_epoch.as_millis()).unwrap_or(i64::MAX);
+    if ended <= ms {
+        legacy
+    } else {
+        (ended - ms, ended)
+    }
+}
+
 fn parse_sha256(s: &str) -> Option<Sha256> {
     let bytes = hex::decode(s).ok()?;
     let arr: [u8; 32] = bytes.try_into().ok()?;
     Some(Sha256(arr))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use repolith_core::types::ActionId;
+
+    fn ok_event(id: &str, ms: u64) -> BuildEvent {
+        BuildEvent::Success {
+            id: ActionId(id.to_string()),
+            input: Sha256([3; 32]),
+            output: Sha256([4; 32]),
+            ms,
+        }
+    }
+
+    /// Write a row exactly as every version before this fix did: the
+    /// `started_at` column pinned to 0, the duration parked in `ended_at`.
+    fn insert_legacy_row(cache: &SqliteCache, id: &str, ms: i64) {
+        let c = cache.conn.lock().expect("lock");
+        c.execute(
+            "INSERT OR REPLACE INTO build_events
+             (action_id, input_hash, output_hash, status, started_at, ended_at, error_json)
+             VALUES (?1, ?2, ?3, 'success', 0, ?4, NULL)",
+            params![
+                id,
+                Sha256([3; 32]).to_string(),
+                Sha256([4; 32]).to_string(),
+                ms
+            ],
+        )
+        .expect("insert legacy row");
+    }
+
+    fn columns_of(cache: &SqliteCache, id: &str) -> (i64, i64) {
+        let c = cache.conn.lock().expect("lock");
+        c.query_row(
+            "SELECT started_at, ended_at FROM build_events WHERE action_id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("row exists")
+    }
+
+    /// The whole point of not migrating: a cache written by an older
+    /// repolith must keep working, and must not surface a 1970 date.
+    #[tokio::test]
+    async fn legacy_row_keeps_its_duration_and_reports_no_date() {
+        let cache = SqliteCache::in_memory().expect("in-memory");
+        insert_legacy_row(&cache, "old::cargo-install::0", 1234);
+        let id = ActionId("old::cargo-install::0".to_string());
+
+        let rec = cache
+            .last_record(&id)
+            .await
+            .expect("a pre-fix row must stay readable");
+        assert!(
+            rec.recorded_at.is_none(),
+            "started_at == 0 is the pre-fix shape; it means 'unknown', not epoch zero"
+        );
+        match rec.event {
+            BuildEvent::Success { ms, .. } => {
+                assert_eq!(
+                    ms, 1234,
+                    "the duration stored by the old writer must survive"
+                );
+            }
+            BuildEvent::Failed { .. } => panic!("expected Success"),
+        }
+    }
+
+    #[tokio::test]
+    async fn new_rows_are_dated_without_disturbing_the_duration() {
+        let mut cache = SqliteCache::in_memory().expect("in-memory");
+        let id = ActionId("new::cargo-install::0".to_string());
+        cache.record(ok_event(&id.0, 1234)).await.expect("record");
+
+        let rec = cache.last_record(&id).await.expect("readable");
+        match rec.event {
+            BuildEvent::Success { ms, .. } => assert_eq!(ms, 1234, "duration must be untouched"),
+            BuildEvent::Failed { .. } => panic!("expected Success"),
+        }
+        assert!(
+            rec.recorded_at.is_some(),
+            "a freshly written row must be dated"
+        );
+
+        // Assert on the raw columns too: the read path recovers `ms` by
+        // subtraction, so a writer that stored (0, ms) would pass every
+        // assertion above while still leaving the columns meaningless.
+        let (started, ended) = columns_of(&cache, &id.0);
+        assert_eq!(ended - started, 1234, "duration recoverable by subtraction");
+        assert!(
+            started > 1_600_000_000_000,
+            "started_at must be a real epoch-ms reading (2020 or later), got {started}"
+        );
+    }
+
+    #[test]
+    fn stamps_preserve_the_subtraction_invariant() {
+        for ms in [0u64, 1, 1234, 86_400_000] {
+            let (started, ended) = stamps(ms);
+            assert_eq!(
+                u64::try_from(ended - started).expect("non-negative"),
+                ms,
+                "last_build recovers the duration as ended - started; \
+                 stamps() must keep that exact for ms = {ms}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_undatable_build_falls_back_to_the_legacy_shape() {
+        // A duration larger than the current epoch time cannot be anchored
+        // on the clock without inventing a pre-epoch start. Degrade to the
+        // undated shape instead — a missing date, never a wrong duration.
+        let (started, ended) = stamps(u64::MAX);
+        assert_eq!(started, 0, "0 is the 'no write time' marker");
+        assert_eq!(ended - started, i64::MAX, "duration still recoverable");
+    }
 }

@@ -6,7 +6,7 @@
 //! so consumers like [`crate::plan::Plan`] can depend on the abstraction
 //! without pulling in any specific backend.
 
-use crate::types::{ActionId, BuildEvent};
+use crate::types::{ActionId, BuildEvent, BuildRecord};
 use async_trait::async_trait;
 use thiserror::Error;
 
@@ -33,6 +33,23 @@ pub type Result<T> = std::result::Result<T, CacheError>;
 pub trait Cache: Send + Sync {
     /// Last recorded event for `id`, or `None` if the action has never run.
     async fn last_build(&self, id: &ActionId) -> Option<BuildEvent>;
+
+    /// Same as [`Self::last_build`], plus whatever storage metadata the
+    /// backend tracks — currently just the write time.
+    ///
+    /// This is the query path for human-facing output (`repolith status`);
+    /// planning uses [`Self::last_build`], because *when* a build happened
+    /// must never influence *whether* it is stale — only its input hash may.
+    ///
+    /// The default implementation delegates to [`Self::last_build`] and
+    /// reports `recorded_at: None`, so backends that do not track write
+    /// times need not implement anything.
+    async fn last_record(&self, id: &ActionId) -> Option<BuildRecord> {
+        self.last_build(id).await.map(|event| BuildRecord {
+            event,
+            recorded_at: None,
+        })
+    }
 
     /// Persist `event`. After success, [`Self::last_build`] for the event's
     /// id must return this event.

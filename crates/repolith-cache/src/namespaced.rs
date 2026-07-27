@@ -10,7 +10,7 @@
 
 use async_trait::async_trait;
 use repolith_core::cache::{Cache, Result};
-use repolith_core::types::{ActionId, BuildEvent};
+use repolith_core::types::{ActionId, BuildEvent, BuildRecord};
 
 /// Cache decorator that prefixes every id with a fixed namespace.
 pub struct NamespacedCache<C> {
@@ -102,6 +102,19 @@ impl<C: Cache> Cache for NamespacedCache<C> {
         Some(self.stripped_event(event))
     }
 
+    /// Forwarded explicitly rather than left to the trait's default body,
+    /// which would route through [`Cache::last_build`] and silently drop a
+    /// timestamp the inner backend actually has. This decorator is the
+    /// federation-over-shared-Neo4j path — exactly where knowing *when* a
+    /// sibling machine built something is the point.
+    async fn last_record(&self, id: &ActionId) -> Option<BuildRecord> {
+        let rec = self.inner.last_record(&self.prefixed(id)).await?;
+        Some(BuildRecord {
+            event: self.stripped_event(rec.event),
+            recorded_at: rec.recorded_at,
+        })
+    }
+
     async fn record(&mut self, event: BuildEvent) -> Result<()> {
         let event = self.prefixed_event(event);
         self.inner.record(event).await
@@ -146,6 +159,28 @@ mod tests {
 
         b.record(success(&id.0)).await.unwrap();
         assert!(b.last_build(&id).await.is_some());
+    }
+
+    /// The decorator must forward the timestamp, not fall back to the
+    /// trait's default body — which would compile fine, pass every other
+    /// test, and quietly report "never dated" for every federated action.
+    #[tokio::test]
+    async fn the_inner_timestamp_survives_the_decorator() {
+        let mut c = NamespacedCache::new(SqliteCache::in_memory().unwrap(), "ns::");
+        let id = ActionId("node::kind::0".to_string());
+        c.record(success(&id.0)).await.unwrap();
+
+        let rec = c.last_record(&id).await.expect("record readable");
+        assert!(
+            rec.recorded_at.is_some(),
+            "the inner SQLite backend dated this write; the decorator dropped it"
+        );
+        match rec.event {
+            BuildEvent::Success { id: got, .. } => {
+                assert_eq!(got, id, "the prefix must be stripped on this path too");
+            }
+            BuildEvent::Failed { .. } => panic!("expected Success"),
+        }
     }
 
     #[tokio::test]
