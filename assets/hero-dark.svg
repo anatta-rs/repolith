@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 300" width="880" height="300" role="img" aria-labelledby="t d">
+  <title id="t">repolith: one manifest, many repositories, layered parallel execution</title>
+  <desc id="d">Four sibling git repositories feed a single repolith.toml. The plan splits into two layers: layer one runs three clones in parallel, layer two runs two builds. A content-addressed cache sits underneath and skips work that has not changed.</desc>
+
+  <defs>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+      .sans { font-family: ui-sans-serif, -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif; }
+    </style>
+    <marker id="a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect width="880" height="300" fill="#0d1117"/>
+
+  <!-- sibling repositories -->
+  <text x="40" y="38" class="sans" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">SIBLING REPOSITORIES</text>
+  <g class="mono" font-size="12.5" fill="#e6edf3">
+    <rect x="40" y="52" width="150" height="34" rx="7" fill="#161b22" stroke="#30363d"/>
+    <text x="58" y="74">shared-types</text>
+    <rect x="40" y="96" width="150" height="34" rx="7" fill="#161b22" stroke="#30363d"/>
+    <text x="58" y="118">domain-engine</text>
+    <rect x="40" y="140" width="150" height="34" rx="7" fill="#161b22" stroke="#30363d"/>
+    <text x="58" y="162">migration-tool</text>
+    <rect x="40" y="184" width="150" height="34" rx="7" fill="#161b22" stroke="#30363d"/>
+    <text x="58" y="206">ops-cli</text>
+  </g>
+
+  <!-- converge -->
+  <g stroke="#64748b" stroke-width="1.4" fill="none" marker-end="url(#a)">
+    <path d="M190 69 C 232 69, 232 135, 268 135"/>
+    <path d="M190 113 C 232 113, 232 135, 268 135"/>
+    <path d="M190 157 C 232 157, 232 135, 268 135"/>
+    <path d="M190 201 C 232 201, 232 135, 268 135"/>
+  </g>
+
+  <!-- the manifest -->
+  <rect x="276" y="98" width="168" height="74" rx="10" fill="#1e1b4b" stroke="#818cf8" stroke-width="1.6"/>
+  <text x="360" y="126" text-anchor="middle" class="mono" font-size="14" font-weight="600" fill="#c7d2fe">repolith.toml</text>
+  <text x="360" y="147" text-anchor="middle" class="sans" font-size="11.5" fill="#a5b4fc">one declarative file</text>
+  <text x="360" y="163" text-anchor="middle" class="sans" font-size="11.5" fill="#818cf8">no bash glue</text>
+
+  <path d="M444 135 L 486 135" stroke="#64748b" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+
+  <!-- layered execution -->
+  <text x="500" y="38" class="sans" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">PARALLEL LAYERS</text>
+
+  <rect x="496" y="52" width="344" height="76" rx="9" fill="#0b2418" stroke="#238636"/>
+  <text x="512" y="72" class="sans" font-size="11" font-weight="600" fill="#7ee787">layer 1 · concurrent</text>
+  <g class="mono" font-size="11.5" fill="#c9f7d5">
+    <rect x="512" y="82" width="100" height="30" rx="6" fill="#12301f" stroke="#2ea043"/>
+    <text x="562" y="101" text-anchor="middle">git-clone</text>
+    <rect x="622" y="82" width="100" height="30" rx="6" fill="#12301f" stroke="#2ea043"/>
+    <text x="672" y="101" text-anchor="middle">git-clone</text>
+    <rect x="732" y="82" width="92" height="30" rx="6" fill="#12301f" stroke="#2ea043"/>
+    <text x="778" y="101" text-anchor="middle">docker</text>
+  </g>
+
+  <path d="M668 128 L 668 146" stroke="#64748b" stroke-width="1.4" fill="none" marker-end="url(#a)"/>
+
+  <rect x="496" y="152" width="344" height="76" rx="9" fill="#0b2418" stroke="#238636"/>
+  <text x="512" y="172" class="sans" font-size="11" font-weight="600" fill="#7ee787">layer 2 · starts when layer 1 settles</text>
+  <g class="mono" font-size="11.5" fill="#c9f7d5">
+    <rect x="512" y="182" width="140" height="30" rx="6" fill="#12301f" stroke="#2ea043"/>
+    <text x="582" y="201" text-anchor="middle">cargo-install</text>
+    <rect x="662" y="182" width="162" height="30" rx="6" fill="#12301f" stroke="#2ea043"/>
+    <text x="743" y="201" text-anchor="middle">repolith (nested)</text>
+  </g>
+
+  <!-- cache -->
+  <rect x="40" y="244" width="800" height="34" rx="8" fill="#241c07" stroke="#9e6a03"/>
+  <text x="58" y="265" class="sans" font-size="12" fill="#f0d78c">
+    <tspan font-weight="600">Content-addressed cache</tspan>
+    <tspan dx="10" fill="#d4a72c">nothing re-runs unless its inputs actually changed — and never skipped when they did</tspan>
+  </text>
+</svg>
