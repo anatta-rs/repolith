@@ -17,10 +17,10 @@ name = "repolith-dev"
 # `.`. `crate` is the *binary* name (`[[bin]] name` in repolith-cli), which
 # differs from the package name.
 #
-# Caveat worth knowing: the staleness digest covers `crates/repolith-cli`
-# only. Editing `repolith-core` does not mark this node stale, because the
-# digest does not follow path dependencies — use `cargo install` directly, or
-# touch the CLI crate, until that gap is closed.
+# The staleness digest follows `path` dependencies, so editing any of
+# `repolith-core`, `-actions`, `-cache` or `-engine` marks this node stale —
+# as does editing the workspace root `Cargo.toml`. Editing something that is
+# not an input (this file's own README, say) does not.
 [[node]]
 id = "repolith"
 path = "crates/repolith-cli"
