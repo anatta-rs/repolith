@@ -33,11 +33,47 @@ fn fresh_ctx() -> Ctx {
     ctx_with_cancel(CancellationToken::new())
 }
 
-fn make_action(install_to: PathBuf, features: Vec<String>) -> CargoInstall {
+/// Copy the fixture into a private writable tempdir.
+///
+/// **Every** test goes through this, including the ones that only read.
+/// `cargo install --path` writes a `target/` directory next to the manifest
+/// it is given, so pointing an action at the checked-in fixture makes one
+/// test mutate a tree the others are reading — concurrently, since libtest
+/// runs them in parallel. That was invisible on a machine with a shared
+/// `CARGO_TARGET_DIR` configured (the build output lands elsewhere) and a
+/// hard failure in CI, where `target/` duly appeared inside the fixture and
+/// the copy below tried to `fs::copy` a directory.
+fn writable_fixture() -> TempDir {
+    let tmp = TempDir::new().expect("tempdir");
+    copy_tree(&fixture_path(), tmp.path());
+    tmp
+}
+
+/// Recursive copy, skipping build output and git internals — the same two
+/// exclusions the source digest applies, so a fixture polluted by an earlier
+/// local run still copies cleanly.
+fn copy_tree(src: &std::path::Path, dest: &std::path::Path) {
+    std::fs::create_dir_all(dest).expect("mkdir");
+    for entry in std::fs::read_dir(src).expect("read dir") {
+        let entry = entry.expect("entry");
+        let name = entry.file_name();
+        if matches!(name.to_str(), Some("target" | ".git")) {
+            continue;
+        }
+        let to = dest.join(&name);
+        if entry.file_type().expect("file type").is_dir() {
+            copy_tree(&entry.path(), &to);
+        } else {
+            std::fs::copy(entry.path(), &to).expect("copy");
+        }
+    }
+}
+
+fn make_action(src: &std::path::Path, install_to: PathBuf, features: Vec<String>) -> CargoInstall {
     CargoInstall {
         id: ActionId("hello::cargo-install::0".to_string()),
         source: CargoSource::Path {
-            path: fixture_path(),
+            path: src.to_path_buf(),
         },
         crate_name: Some("hello-world".to_string()),
         package: None,
@@ -51,7 +87,8 @@ fn make_action(install_to: PathBuf, features: Vec<String>) -> CargoInstall {
 #[tokio::test]
 async fn install_from_path_produces_binary() {
     let tmp = TempDir::new().expect("tempdir");
-    let action = make_action(tmp.path().to_path_buf(), vec![]);
+    let src = writable_fixture();
+    let action = make_action(src.path(), tmp.path().to_path_buf(), vec![]);
     let out = action
         .execute(&fresh_ctx())
         .await
@@ -64,8 +101,13 @@ async fn install_from_path_produces_binary() {
 #[tokio::test]
 async fn input_hash_includes_features() {
     let tmp = TempDir::new().unwrap();
-    let plain = make_action(tmp.path().to_path_buf(), vec![]);
-    let loud = make_action(tmp.path().to_path_buf(), vec!["loud".to_string()]);
+    let src = writable_fixture();
+    let plain = make_action(src.path(), tmp.path().to_path_buf(), vec![]);
+    let loud = make_action(
+        src.path(),
+        tmp.path().to_path_buf(),
+        vec!["loud".to_string()],
+    );
 
     let h_plain = plain.input_hash(&fresh_ctx()).await.unwrap();
     let h_loud = loud.input_hash(&fresh_ctx()).await.unwrap();
@@ -82,7 +124,8 @@ async fn input_hash_includes_features() {
 #[tokio::test]
 async fn cancellation_aborts() {
     let tmp = TempDir::new().unwrap();
-    let action = make_action(tmp.path().to_path_buf(), vec![]);
+    let src = writable_fixture();
+    let action = make_action(src.path(), tmp.path().to_path_buf(), vec![]);
     let cancel = CancellationToken::new();
     cancel.cancel();
     let result = action.execute(&ctx_with_cancel(cancel)).await;
@@ -101,26 +144,6 @@ async fn cancellation_aborts() {
 // it. Reverting the Path branch to hashing the path string — the original
 // bug — leaves every `source_hash` test green but fails these.
 // ---------------------------------------------------------------------------
-
-/// Copy the fixture into a writable tempdir so tests can mutate it.
-fn writable_fixture() -> TempDir {
-    let tmp = TempDir::new().expect("tempdir");
-    let src = fixture_path();
-    for entry in std::fs::read_dir(&src).expect("read fixture") {
-        let entry = entry.expect("entry");
-        let dest = tmp.path().join(entry.file_name());
-        if entry.file_type().expect("file type").is_dir() {
-            std::fs::create_dir_all(&dest).expect("mkdir");
-            for sub in std::fs::read_dir(entry.path()).expect("read subdir") {
-                let sub = sub.expect("sub entry");
-                std::fs::copy(sub.path(), dest.join(sub.file_name())).expect("copy");
-            }
-        } else {
-            std::fs::copy(entry.path(), &dest).expect("copy");
-        }
-    }
-    tmp
-}
 
 fn action_at(source: PathBuf, install_to: PathBuf) -> CargoInstall {
     CargoInstall {
@@ -191,7 +214,8 @@ async fn input_hash_survives_a_missing_source_tree() {
 #[tokio::test]
 async fn output_present_tracks_the_installed_binary() {
     let tmp = TempDir::new().expect("tempdir");
-    let action = make_action(tmp.path().to_path_buf(), vec![]);
+    let src = writable_fixture();
+    let action = make_action(src.path(), tmp.path().to_path_buf(), vec![]);
 
     assert!(
         !action.output_present(&fresh_ctx()).await,
@@ -262,7 +286,8 @@ async fn input_hash_distinguishes_the_build_profile() {
 #[tokio::test]
 async fn dev_profile_installs_a_working_binary() {
     let tmp = TempDir::new().expect("tempdir");
-    let mut action = make_action(tmp.path().to_path_buf(), vec![]);
+    let src = writable_fixture();
+    let mut action = make_action(src.path(), tmp.path().to_path_buf(), vec![]);
     action.profile = Some("dev".to_string());
 
     action

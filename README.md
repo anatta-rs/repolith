@@ -104,10 +104,13 @@ machine having built something is not a reason to skip building it here.
 - **Cache-first, and honest about it.** Every successful build writes a
   `BuildEvent` keyed by a content-addressed input hash — for local `path`
   sources that means the tree's actual bytes (`.gitignore`-aware, `target/`
-  excluded, mtimes ignored so a fresh clone doesn't look stale). Before
-  trusting a cache hit the planner also checks the artifact is still here.
-  Re-runs are near-instant when nothing changed, and never skipped when
-  something did.
+  excluded, mtimes ignored so a fresh clone doesn't look stale). For a
+  workspace member it means more than its own directory: the hash follows
+  `path` dependencies transitively and covers the workspace root manifest
+  and lockfile, so editing a crate your binary is built from marks it stale.
+  Before trusting a cache hit the planner also checks the artifact is still
+  here. Re-runs are near-instant when nothing changed, and never skipped
+  when something did.
 - **Hardened argv.** URLs validated against a scheme allowlist with
   nested-userinfo / host / path-segment leading-dash checks; `--` argv
   separator before every user URL as defense in depth; crate names + feature
