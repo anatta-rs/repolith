@@ -5,7 +5,7 @@ use repolith_core::action::Action;
 use repolith_core::cache::{Cache, Result as CacheResult};
 use repolith_core::plan::{ChangeReason, Plan, PlanError};
 use repolith_core::types::{ActionId, BuildError, BuildEvent, BuildOutput, Ctx, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
@@ -514,4 +514,178 @@ fn very_long_failure_is_capped() {
     let s = reason.to_string();
     assert!(s.len() < 110, "capped, got {} chars", s.len());
     assert!(s.ends_with("..."), "signals truncation: {s}");
+}
+
+// ---------------------------------------------------------------------------
+// `--force`: an explicit request outranks every cache-derived reason, and the
+// existing UpstreamMoved cascade carries it to whatever is built from the
+// forced action. The unforced plan must not move (issue #95).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn forcing_an_up_to_date_action_marks_it_stale() {
+    let actions: Vec<Box<dyn Action>> = vec![Box::new(StubAction::new("a", &[], 1))];
+    let cache = MockCache::new().with_event(BuildEvent::Success {
+        id: aid("a"),
+        input: Sha256([1; 32]),
+        output: Sha256([9; 32]),
+        ms: 1,
+    });
+
+    // Baseline: the cache agrees, so nothing is stale.
+    let plan = Plan::compute(&actions, &cache, &ctx()).await.expect("plan");
+    assert!(plan.reasons().is_empty(), "precondition: nothing stale");
+
+    let forced = [aid("a")].into_iter().collect();
+    let plan = Plan::compute_with_forced(&actions, &cache, &ctx(), &forced)
+        .await
+        .expect("plan");
+    assert_eq!(
+        plan.reasons().get(&aid("a")),
+        Some(&ChangeReason::Forced),
+        "forced must be its own reason, not NoCachedBuild — a forced run and \
+         a lost cache mean very different things"
+    );
+}
+
+#[tokio::test]
+async fn forcing_cascades_to_dependents() {
+    // b depends on a; both are up to date. Forcing `a` alone must still
+    // re-run `b`, or a forced rebuild leaves a half-rebuilt stack.
+    let actions: Vec<Box<dyn Action>> = vec![
+        Box::new(StubAction::new("a", &[], 1)),
+        Box::new(StubAction::new("b", &["a"], 2)),
+    ];
+    let cache = MockCache::new()
+        .with_event(BuildEvent::Success {
+            id: aid("a"),
+            input: Sha256([1; 32]),
+            output: Sha256([9; 32]),
+            ms: 1,
+        })
+        .with_event(BuildEvent::Success {
+            id: aid("b"),
+            input: Sha256([2; 32]),
+            output: Sha256([8; 32]),
+            ms: 1,
+        });
+
+    let plan = Plan::compute(&actions, &cache, &ctx()).await.expect("plan");
+    assert!(plan.reasons().is_empty(), "precondition: nothing stale");
+
+    let forced = [aid("a")].into_iter().collect();
+    let plan = Plan::compute_with_forced(&actions, &cache, &ctx(), &forced)
+        .await
+        .expect("plan");
+    assert_eq!(plan.reasons().get(&aid("a")), Some(&ChangeReason::Forced));
+    assert_eq!(
+        plan.reasons().get(&aid("b")),
+        Some(&ChangeReason::UpstreamMoved { dep: aid("a") }),
+        "the pre-existing cascade must carry the force downstream"
+    );
+}
+
+#[tokio::test]
+async fn forcing_a_dependent_does_not_drag_in_its_dependency() {
+    // The cascade runs one way only. Forcing `b` must not re-run `a`:
+    // `--force` is a targeted instrument, and rebuilding upstream of the
+    // named action would make a narrow request unexpectedly wide.
+    let actions: Vec<Box<dyn Action>> = vec![
+        Box::new(StubAction::new("a", &[], 1)),
+        Box::new(StubAction::new("b", &["a"], 2)),
+    ];
+    let cache = MockCache::new()
+        .with_event(BuildEvent::Success {
+            id: aid("a"),
+            input: Sha256([1; 32]),
+            output: Sha256([9; 32]),
+            ms: 1,
+        })
+        .with_event(BuildEvent::Success {
+            id: aid("b"),
+            input: Sha256([2; 32]),
+            output: Sha256([8; 32]),
+            ms: 1,
+        });
+
+    let forced = [aid("b")].into_iter().collect();
+    let plan = Plan::compute_with_forced(&actions, &cache, &ctx(), &forced)
+        .await
+        .expect("plan");
+    assert_eq!(plan.reasons().get(&aid("b")), Some(&ChangeReason::Forced));
+    assert!(
+        !plan.reasons().contains_key(&aid("a")),
+        "an untouched dependency must stay up to date"
+    );
+}
+
+#[tokio::test]
+async fn forced_outranks_a_cache_derived_reason() {
+    // The action is stale anyway (inputs moved). `Forced` still wins, so
+    // `--explain` answers "because you asked", which is the honest answer.
+    let actions: Vec<Box<dyn Action>> = vec![Box::new(StubAction::new("a", &[], 1))];
+    let cache = MockCache::new().with_event(BuildEvent::Success {
+        id: aid("a"),
+        input: Sha256([7; 32]), // differs from the action's hash
+        output: Sha256([9; 32]),
+        ms: 1,
+    });
+
+    let forced = [aid("a")].into_iter().collect();
+    let plan = Plan::compute_with_forced(&actions, &cache, &ctx(), &forced)
+        .await
+        .expect("plan");
+    assert_eq!(plan.reasons().get(&aid("a")), Some(&ChangeReason::Forced));
+}
+
+#[tokio::test]
+async fn an_empty_force_set_leaves_the_plan_identical() {
+    // The whole safety argument for touching the planner: without --force,
+    // nothing moves.
+    let build = || -> Vec<Box<dyn Action>> {
+        vec![
+            Box::new(StubAction::new("a", &[], 1)),
+            Box::new(StubAction::new("b", &["a"], 2)),
+            Box::new(StubAction::new("c", &["a"], 3)),
+        ]
+    };
+    let cache = MockCache::new().with_event(BuildEvent::Success {
+        id: aid("a"),
+        input: Sha256([1; 32]),
+        output: Sha256([9; 32]),
+        ms: 1,
+    });
+
+    let plain = Plan::compute(&build(), &cache, &ctx()).await.expect("plan");
+    let empty = Plan::compute_with_forced(&build(), &cache, &ctx(), &HashSet::default())
+        .await
+        .expect("plan");
+
+    assert_eq!(plain.layers(), empty.layers(), "layering must not move");
+    assert_eq!(plain.reasons(), empty.reasons(), "reasons must not move");
+}
+
+#[test]
+fn forced_renders_as_one_word() {
+    assert_eq!(ChangeReason::Forced.to_string(), "forced");
+}
+
+#[tokio::test]
+async fn forcing_a_never_built_action_still_reports_forced() {
+    // Precedence check. Moving the `forced` branch below the empty-cache
+    // branch leaves every other test in this file green while silently
+    // relabelling a forced first run as `NoCachedBuild`.
+    let actions: Vec<Box<dyn Action>> = vec![Box::new(StubAction::new("a", &[], 1))];
+    let cache = MockCache::new(); // nothing recorded
+
+    let forced = [aid("a")].into_iter().collect();
+    let plan = Plan::compute_with_forced(&actions, &cache, &ctx(), &forced)
+        .await
+        .expect("plan");
+    assert_eq!(
+        plan.reasons().get(&aid("a")),
+        Some(&ChangeReason::Forced),
+        "an explicit request outranks every cache-derived reason, including \
+         the absence of a cache entry"
+    );
 }

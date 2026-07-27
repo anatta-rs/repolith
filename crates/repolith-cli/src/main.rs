@@ -21,7 +21,7 @@ use repolith_core::manifest::{ActionEntry, Manifest, action_kind};
 use repolith_core::plan::{ChangeReason, Plan};
 use repolith_core::types::{ActionId, BuildEvent, Ctx, ExecMode};
 use repolith_engine::orchestrator::Orchestrator;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -102,6 +102,19 @@ struct SyncArgs {
     /// Compute the plan but do not execute anything.
     #[arg(long)]
     dry_run: bool,
+
+    /// Re-run actions even when the cache says they are up to date.
+    ///
+    /// Bare `--force` forces everything; `--force <FILTER>` forces only
+    /// actions whose id contains FILTER — the same matching
+    /// `repolith status <FILTER>` uses. Whatever is built from a forced
+    /// action re-runs too.
+    ///
+    /// Reach for it when you suspect the cache is wrong, or when an input
+    /// exists that repolith does not model (a system library, a rustc
+    /// nightly rolling forward). It only ever causes more work, never less.
+    #[arg(long, value_name = "FILTER", num_args = 0..=1, default_missing_value = "")]
+    force: Option<String>,
 }
 
 #[tokio::main]
@@ -303,6 +316,35 @@ async fn build_orchestrator(
     builder.build().map_err(anyhow::Error::from)
 }
 
+/// Turn `--force [FILTER]` into the set of action ids to force.
+///
+/// A bare `--force` arrives as an empty filter, and `id.contains("")` is
+/// always true — so "force everything" and "force a subset" are the same
+/// code path rather than two, and there is no separate all-or-nothing flag
+/// to keep in step.
+fn resolve_forced(orch: &Orchestrator, filter: Option<&str>) -> Result<HashSet<ActionId>> {
+    let Some(filter) = filter else {
+        return Ok(HashSet::new());
+    };
+    let forced: HashSet<ActionId> = orch
+        .actions()
+        .iter()
+        .map(|a| a.id())
+        .filter(|id| id.0.contains(filter))
+        .collect();
+
+    // A filter that matches nothing is a failed request, not a quiet no-op:
+    // otherwise a typo looks exactly like "everything was already fine".
+    // An empty filter over an empty manifest is not an error — there is
+    // simply nothing to do, which `dry-run` already reports.
+    if forced.is_empty() && !filter.is_empty() {
+        anyhow::bail!(
+            "no action id contains `{filter}` — run `repolith status` with no argument to list them"
+        );
+    }
+    Ok(forced)
+}
+
 async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Result<()> {
     let mode = if args.keep_going {
         ExecMode::KeepGoing
@@ -310,7 +352,8 @@ async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Resu
         ExecMode::FailFast
     };
     let mut orch = build_orchestrator(cli, cancel, args.jobs, mode).await?;
-    let plan = orch.compute_plan().await?;
+    let forced = resolve_forced(&orch, args.force.as_deref())?;
+    let plan = orch.compute_plan_with_forced(&forced).await?;
 
     if args.explain || args.dry_run {
         if plan.reasons().is_empty() {

@@ -114,6 +114,23 @@ impl Orchestrator {
         Plan::compute(&self.actions, self.cache.as_ref(), &self.base_ctx).await
     }
 
+    /// Same as [`Self::compute_plan`], but every id in `forced` is stale
+    /// regardless of cache state.
+    ///
+    /// Deliberately **not** propagated to federated child stacks: a nested
+    /// `RepolithSync` builds its own orchestrator, and inheriting the
+    /// parent's force set would silently turn a targeted `--force` into a
+    /// recursive rebuild of the whole tree.
+    ///
+    /// # Errors
+    /// Forwarded from `Plan::compute_with_forced`.
+    pub async fn compute_plan_with_forced(
+        &self,
+        forced: &std::collections::HashSet<repolith_core::types::ActionId>,
+    ) -> Result<Plan, PlanError> {
+        Plan::compute_with_forced(&self.actions, self.cache.as_ref(), &self.base_ctx, forced).await
+    }
+
     /// The registered actions, in registration order.
     ///
     /// Read-only, for consumers that need to describe the graph a `Plan`

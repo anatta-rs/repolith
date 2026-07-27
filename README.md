@@ -190,6 +190,27 @@ Action ids are `{node}::{kind}::{index}` and are stable — they are the
 cache keys. A filter that matches nothing exits non-zero, so a typo is
 never mistaken for a healthy action.
 
+### Forcing a rebuild
+
+The same filter drives `sync`, for when you want work to happen anyway:
+
+```bash
+repolith sync --force              # everything
+repolith sync --force land         # just the `land` node
+repolith sync --force --dry-run    # see what it would do first
+```
+
+Reach for it when you suspect the cache is wrong, or when an input exists
+that repolith does not model — a system library, a rustc nightly rolling
+forward, a `~/.cargo/config.toml` edit. It only ever causes *more* work,
+never less, so it can't leave you with a stale artifact.
+
+Whatever is built from a forced action re-runs too, via the normal
+staleness cascade. One deliberate exception: a `kind = "repolith"` node
+re-runs the coordinator but does **not** force the nested stack — otherwise
+a targeted `--force` would quietly become a recursive rebuild of the whole
+tree. To force a child stack, run `repolith sync --force` inside it.
+
 See [`repolith.toml.example`](repolith.toml.example) for a full annotated
 manifest.
 

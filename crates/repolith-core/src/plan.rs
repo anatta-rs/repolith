@@ -64,6 +64,14 @@ pub enum ChangeReason {
         /// `BuildError`'s `Display` output, as recorded in the cache.
         error: String,
     },
+    /// The caller asked for this action to run regardless of cache state
+    /// (`repolith sync --force`).
+    ///
+    /// Distinct from [`Self::NoCachedBuild`] on purpose: "you told me to"
+    /// and "I have never seen this" lead to the same work but mean very
+    /// different things when reading `--explain` output, and conflating
+    /// them would make a forced run indistinguishable from a lost cache.
+    Forced,
 }
 
 impl std::fmt::Display for ChangeReason {
@@ -72,6 +80,7 @@ impl std::fmt::Display for ChangeReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoCachedBuild => write!(f, "never built"),
+            Self::Forced => write!(f, "forced"),
             Self::InputHashChanged { from, to } => {
                 write!(f, "inputs changed ({} -> {})", from.short(), to.short())
             }
@@ -145,6 +154,24 @@ impl Plan {
         actions: &[Box<dyn Action>],
         cache: &dyn Cache,
         ctx: &Ctx,
+    ) -> std::result::Result<Self, PlanError> {
+        Self::compute_with_forced(actions, cache, ctx, &HashSet::new()).await
+    }
+
+    /// Same as [`Self::compute`], but every id in `forced` is stale
+    /// regardless of what the cache says — `repolith sync --force`.
+    ///
+    /// Nothing else changes. In particular the [`ChangeReason::UpstreamMoved`]
+    /// cascade is untouched, so forcing an action also re-runs whatever is
+    /// built from it without any special handling here.
+    ///
+    /// # Errors
+    /// Same as [`Self::compute`].
+    pub async fn compute_with_forced(
+        actions: &[Box<dyn Action>],
+        cache: &dyn Cache,
+        ctx: &Ctx,
+        forced: &HashSet<ActionId>,
     ) -> std::result::Result<Self, PlanError> {
         // 1. Build inbound + dependents maps.
         let ids: HashSet<ActionId> = actions.iter().map(|a| a.id()).collect();
@@ -233,7 +260,15 @@ impl Plan {
                 input_hashes.insert(id.clone(), now);
                 let last = cached_map.get(id).and_then(Option::as_ref);
                 let present = presence_map.get(id).copied().unwrap_or(true);
-                if let Some(reason) = classify(id, by_id[id], now, last, &stale, present) {
+                if let Some(reason) = classify(
+                    id,
+                    by_id[id],
+                    now,
+                    last,
+                    &stale,
+                    present,
+                    forced.contains(id),
+                ) {
                     reasons.insert(id.clone(), reason);
                     stale.insert(id.clone());
                 }
@@ -337,8 +372,16 @@ fn classify(
     last: Option<&BuildEvent>,
     stale: &HashSet<ActionId>,
     output_present: bool,
+    forced: bool,
 ) -> Option<ChangeReason> {
     let _ = id; // referenced only for trace context in future revisions
+    // An explicit request outranks every cache-derived reason. Checked
+    // first so a forced action that also happens to have changed inputs
+    // still reports `Forced` — the user asked, and that is the honest
+    // answer to "why is this running".
+    if forced {
+        return Some(ChangeReason::Forced);
+    }
     // No cache entry at all means `NoCachedBuild`; a recorded failure gets
     // its own reason below. Either way the action re-runs.
     let Some(event) = last else {

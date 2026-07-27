@@ -317,3 +317,92 @@ fn status_help_documents_the_filter() {
         .success()
         .stdout(str::contains("FILTER"));
 }
+
+// ---------------------------------------------------------------------------
+// `sync --force [FILTER]` — issue #95.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn force_marks_a_fresh_manifest_forced_not_never_built() {
+    let tmp = tempfile::tempdir().unwrap();
+    cmd()
+        .arg("--manifest")
+        .arg(fixtures().join("two_nodes.toml"))
+        .arg("--cache-path")
+        .arg(tmp.path().join("cache.db"))
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--explain")
+        .arg("--force")
+        .assert()
+        .success()
+        .stdout(str::contains("forced"))
+        .stdout(str::contains("2 action(s) would run"));
+}
+
+#[test]
+fn force_with_a_filter_narrows_to_matching_actions() {
+    let tmp = tempfile::tempdir().unwrap();
+    cmd()
+        .arg("--manifest")
+        .arg(fixtures().join("two_nodes.toml"))
+        .arg("--cache-path")
+        .arg(tmp.path().join("cache.db"))
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--explain")
+        .arg("--force")
+        .arg("beta")
+        .assert()
+        .success()
+        .stdout(str::contains("beta::cargo-install::0: forced"))
+        // `alpha` is still stale (never built) but must NOT be labelled forced.
+        .stdout(str::contains("alpha::cargo-install::0: forced").not());
+}
+
+/// A filter matching nothing is a failed request, mirroring `status <filter>`.
+#[test]
+fn force_with_an_unmatched_filter_exits_nonzero() {
+    let tmp = tempfile::tempdir().unwrap();
+    cmd()
+        .arg("--manifest")
+        .arg(fixtures().join("two_nodes.toml"))
+        .arg("--cache-path")
+        .arg(tmp.path().join("cache.db"))
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--force")
+        .arg("gamma")
+        .assert()
+        .failure()
+        .stderr(str::contains("gamma"));
+}
+
+/// Bare `--force` over a manifest with no actions is not an error — there is
+/// simply nothing to do.
+#[test]
+fn force_over_an_empty_manifest_is_not_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    cmd()
+        .arg("--manifest")
+        .arg(fixtures().join("empty.toml"))
+        .arg("--cache-path")
+        .arg(tmp.path().join("cache.db"))
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--force")
+        .assert()
+        .success()
+        .stdout(str::contains("0 action(s) would run"));
+}
+
+#[test]
+fn sync_help_documents_force() {
+    cmd()
+        .arg("sync")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(str::contains("--force"))
+        .stdout(str::contains("FILTER"));
+}
