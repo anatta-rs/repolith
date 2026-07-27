@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.10](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.9...repolith-core-v0.0.10) - 2026-07-27
+
+### Added
+
+- *(actions)* cargo-install `profile` + prod/dev manifest convention + sccache docs (closes #82) ([#83](https://github.com/anatta-rs/repolith/pull/83))
+- *(actions)* cargo-install `package` — select a package from a multi-package source (closes #77) ([#80](https://github.com/anatta-rs/repolith/pull/80))
+
 ## [0.0.9](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.8...repolith-core-v0.0.9) - 2026-07-26
 
 ### Fixed
