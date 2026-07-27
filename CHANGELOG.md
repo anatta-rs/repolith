@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.11](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.10...repolith-core-v0.0.11) - 2026-07-27
+
+### Added
+
+- *(cli)* repolith status <filter> — drill into one action ([#92](https://github.com/anatta-rs/repolith/pull/92))
+
+### Fixed
+
+- *(cache)* store a real timestamp, and stop the two backends disagreeing ([#91](https://github.com/anatta-rs/repolith/pull/91))
+- *(cli)* status says what changed and what failed (closes #86) ([#87](https://github.com/anatta-rs/repolith/pull/87))
+
+### Other
+
+- *(readme)* theme-aware hero SVG + mermaid execution model (closes #84) ([#85](https://github.com/anatta-rs/repolith/pull/85))
+
 ## [0.0.10](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.9...repolith-core-v0.0.10) - 2026-07-27
 
 ### Added
