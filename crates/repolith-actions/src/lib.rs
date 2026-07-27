@@ -31,6 +31,13 @@ pub(crate) mod util;
 #[cfg(any(feature = "cargo", feature = "docker"))]
 pub mod source_hash;
 
+/// The local source closure of a cargo package — its own tree plus every
+/// tree reachable through a `path` dependency. Hashing only the package's
+/// own directory made edits to a sibling workspace member invisible
+/// (issue #78).
+#[cfg(feature = "cargo")]
+pub mod source_closure;
+
 /// Path utilities (tilde expansion). Public so the manifest factory in the
 /// CLI can apply the same expansion to `node.path` that `cargo_install`
 /// already applies to `install_to`.

@@ -16,11 +16,6 @@ name = "repolith-dev"
 # workspace root is virtual, so the node points at the CLI crate rather than
 # `.`. `crate` is the *binary* name (`[[bin]] name` in repolith-cli), which
 # differs from the package name.
-#
-# Caveat worth knowing: the staleness digest covers `crates/repolith-cli`
-# only. Editing `repolith-core` does not mark this node stale, because the
-# digest does not follow path dependencies — use `cargo install` directly, or
-# touch the CLI crate, until that gap is closed.
 [[node]]
 id = "repolith"
 path = "crates/repolith-cli"

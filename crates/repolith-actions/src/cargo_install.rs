@@ -6,7 +6,8 @@
 //! `FailFast` mode can short-circuit a long-running build.
 
 use crate::paths::expand_tilde;
-use crate::source_hash::{platform_tag, tree_digest};
+use crate::source_closure::source_closure_digest;
+use crate::source_hash::platform_tag;
 use crate::util::{check_status, run_with_cancel};
 use async_trait::async_trait;
 use repolith_core::action::Action;
@@ -114,7 +115,12 @@ impl Action for CargoInstall {
                 let expanded = expand_tilde(path);
                 h.update(b"path:");
                 if expanded.exists() {
-                    h.update(tree_digest(&expanded)?.0);
+                    // Not just this tree — every local tree it is built
+                    // from. For a workspace member, the member's directory
+                    // alone is not the whole input: editing a crate reached
+                    // through a `path` dependency changed the binary while
+                    // leaving this hash untouched (issue #78).
+                    h.update(source_closure_digest(&expanded, &ctx.cancel).await?.0);
                 } else {
                     // Pre-clone grace: a sibling `git-clone` earlier in the
                     // same node materializes this tree, but planning runs
