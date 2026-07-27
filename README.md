@@ -4,6 +4,12 @@
 
 **Declarative orchestrator for Rust toolchains spread across multiple sibling git repositories.**
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+  <img src="assets/hero-light.svg" width="820"
+       alt="Four sibling git repositories feed a single repolith.toml. The plan splits into two layers: layer one runs clones and a docker build concurrently, layer two runs cargo-install and a nested repolith sync. A content-addressed cache underneath skips work whose inputs have not changed.">
+</picture>
+
 ⚡ Parallel · 🛑 Cancellation-aware · 💾 Cache-first
 
 [![CI](https://img.shields.io/github/actions/workflow/status/anatta-rs/repolith/ci.yml?branch=main&label=CI&logo=github)](https://github.com/anatta-rs/repolith/actions/workflows/ci.yml)
@@ -335,6 +341,31 @@ one server without id collisions.
 5 crates, layered execution with `FuturesUnordered` + `CancellationToken` +
 `Semaphore`. Full diagram + the `FailFast` / `KeepGoing` sequence diagrams
 + design decisions live in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+How one `sync` flows:
+
+```mermaid
+flowchart LR
+    M["repolith.toml"] --> P["Plan::compute"]
+    C[("Cache<br/>SQLite · Neo4j")] --> P
+
+    P -->|"per action, concurrently"| PR["3 probes<br/>input_hash · last_build · output_present"]
+    PR --> CL{"stale?"}
+    CL -->|"no"| SKIP["skip"]
+    CL -->|"NoCachedBuild · InputHashChanged<br/>UpstreamMoved · OutputMissing"| EX["execute"]
+
+    EX --> SEM["Semaphore --jobs N<br/>bounds the whole tree"]
+    SEM --> L1["layer 1 · concurrent"]
+    L1 --> L2["layer 2 · after layer 1 settles"]
+    L2 --> REC["record_batch<br/>one transaction per layer"]
+    REC --> C
+
+    CAN["CancellationToken"] -.->|"Ctrl-C reaps<br/>subprocess groups, every level"| SEM
+```
+
+Every action declares its own `input_hash`, so staleness is decided from
+content rather than timestamps — and `output_present` means a cache entry
+written by another machine never lets this one skip work it has not done.
 
 | Crate | Purpose |
 |---|---|
