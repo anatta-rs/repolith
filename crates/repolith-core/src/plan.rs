@@ -54,6 +54,42 @@ pub enum ChangeReason {
     /// or never here in the first place because another machine wrote the
     /// entry into a shared cache backend.
     OutputMissing,
+    /// The last recorded run of this action failed. Carries the rendered
+    /// error so `status` can say what went wrong instead of pretending the
+    /// action was never run.
+    ///
+    /// Holds a `String` rather than a [`BuildError`]:
+    /// that type is deliberately not `PartialEq`, which this enum needs.
+    PreviousFailure {
+        /// `BuildError`'s `Display` output, as recorded in the cache.
+        error: String,
+    },
+}
+
+impl std::fmt::Display for ChangeReason {
+    /// One short line per reason, suitable for a table cell. `Debug` stays
+    /// derived for tests and for anyone who wants the full hashes.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoCachedBuild => write!(f, "never built"),
+            Self::InputHashChanged { from, to } => {
+                write!(f, "inputs changed ({} -> {})", from.short(), to.short())
+            }
+            Self::UpstreamMoved { dep } => write!(f, "upstream {dep} is stale"),
+            Self::OutputMissing => write!(f, "artifact missing"),
+            Self::PreviousFailure { error } => {
+                // Cargo and git put the message on the first line and the
+                // context below; a table cell only has room for the former.
+                let first = error.lines().next().unwrap_or(error);
+                let trimmed: String = first.chars().take(72).collect();
+                if trimmed.len() < first.len() {
+                    write!(f, "previous run failed: {trimmed}...")
+                } else {
+                    write!(f, "previous run failed: {trimmed}")
+                }
+            }
+        }
+    }
 }
 
 /// Errors raised while computing a [`Plan`].
@@ -303,14 +339,18 @@ fn classify(
     output_present: bool,
 ) -> Option<ChangeReason> {
     let _ = id; // referenced only for trace context in future revisions
-    // Both `None` and a prior `Failed` collapse to `NoCachedBuild`:
-    // we don't carry a "last failure" signal in `ChangeReason`, so a
-    // failed prior build always re-runs.
+    // No cache entry at all means `NoCachedBuild`; a recorded failure gets
+    // its own reason below. Either way the action re-runs.
     let Some(event) = last else {
         return Some(ChangeReason::NoCachedBuild);
     };
     match event {
-        BuildEvent::Failed { .. } => Some(ChangeReason::NoCachedBuild),
+        // Still stale, still re-runs — only the label differs from
+        // `NoCachedBuild`, so `status` can distinguish "never ran" from
+        // "ran and blew up", which the cache has always known.
+        BuildEvent::Failed { error, .. } => Some(ChangeReason::PreviousFailure {
+            error: error.to_string(),
+        }),
         BuildEvent::Success { input, .. } if *input != now => {
             Some(ChangeReason::InputHashChanged {
                 from: *input,

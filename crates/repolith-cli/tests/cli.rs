@@ -83,7 +83,9 @@ fn explain_prints_change_reason() {
         .arg("--dry-run")
         .assert()
         .success()
-        .stdout(str::contains("NoCachedBuild"));
+        // Human-readable rendering, not the Debug dump that used to blow
+        // the table to ~400 columns (issue #86).
+        .stdout(str::contains("never built"));
 }
 
 #[test]

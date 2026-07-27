@@ -24,6 +24,16 @@ impl Display for Sha256 {
     }
 }
 
+impl Sha256 {
+    /// First 8 hex characters — enough to tell two hashes apart at a
+    /// glance, short enough to sit in a table cell. The full [`Display`]
+    /// remains what the cache stores.
+    #[must_use]
+    pub fn short(&self) -> String {
+        hex::encode(&self.0[..4])
+    }
+}
+
 /// The execution context passed to each action.
 #[derive(Clone, Debug)]
 pub struct Ctx {
