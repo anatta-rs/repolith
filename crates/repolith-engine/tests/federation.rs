@@ -193,3 +193,111 @@ async fn no_deadlock_at_jobs_1_with_shared_semaphore() {
     assert_eq!(events.len(), 1);
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
+
+// ---------------------------------------------------------------------------
+// `--force` stops at the stack boundary (issue #95).
+// ---------------------------------------------------------------------------
+
+/// Like [`StubHooks`], but the child's cache is file-backed so it survives
+/// between two executions of the coordinator. Without that the child would
+/// start from an empty cache every time and the assertion below would be
+/// vacuous.
+struct PersistentHooks {
+    counter: Arc<AtomicUsize>,
+    db: PathBuf,
+}
+
+impl FederationHooks for PersistentHooks {
+    fn build_actions(
+        &self,
+        _manifest: &Manifest,
+        _stack_dir: &Path,
+        _chain: &[PathBuf],
+    ) -> Result<Vec<Box<dyn Action>>, BuildError> {
+        Ok(vec![Box::new(CountingAction {
+            id: ActionId("child::work::0".into()),
+            counter: Arc::clone(&self.counter),
+        })])
+    }
+
+    fn open_cache(&self, _stack_dir: &Path) -> Result<Box<dyn Cache>, BuildError> {
+        let cache =
+            SqliteCache::open(&self.db).map_err(|e| BuildError::Io(format!("child cache: {e}")))?;
+        Ok(Box::new(cache))
+    }
+}
+
+/// Forcing a `kind = "repolith"` node re-runs the **coordinator**, which
+/// re-plans the child stack — but the child plans against its own cache and
+/// finds its work up to date, so nothing downstream rebuilds.
+///
+/// This is deliberate: inheriting the parent's force set would silently turn
+/// a targeted `--force` into a recursive rebuild of the whole tree. It is
+/// also surprising enough to be worth pinning — someone who wants to force a
+/// nested stack runs `repolith sync --force` inside it.
+#[tokio::test]
+async fn forcing_the_parent_does_not_force_the_child_stack() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("repolith.toml"), CHILD_MANIFEST).unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let hooks: Arc<dyn FederationHooks> = Arc::new(PersistentHooks {
+        counter: Arc::clone(&counter),
+        db: cache_dir.path().join("child.db"),
+    });
+
+    let coordinator = || RepolithSync {
+        id: ActionId("stack::repolith::0".into()),
+        node_path: dir.path().to_path_buf(),
+        manifest_rel: None,
+        chain: vec![],
+        mode: ExecMode::FailFast,
+        shared_sem: Arc::new(Semaphore::new(4)),
+        hooks: Arc::clone(&hooks),
+        deps: vec![],
+    };
+
+    // First run: the child has never built, so its action runs.
+    coordinator().execute(&ctx()).await.expect("first sync");
+    assert_eq!(counter.load(Ordering::SeqCst), 1, "child ran once");
+
+    // Second run: the child's own cache says it is up to date.
+    coordinator().execute(&ctx()).await.expect("second sync");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "precondition: the child cache persists between runs"
+    );
+
+    // Now force the coordinator from the parent plan and execute it.
+    let mut parent = Orchestrator::builder()
+        .cache_boxed(Box::new(SqliteCache::in_memory().unwrap()))
+        .base_ctx(ctx())
+        .register_boxed(Box::new(coordinator()))
+        .build()
+        .expect("parent orchestrator");
+
+    let forced = [ActionId("stack::repolith::0".into())]
+        .into_iter()
+        .collect();
+    let plan = parent
+        .compute_plan_with_forced(&forced)
+        .await
+        .expect("parent plan");
+    assert!(
+        plan.reasons()
+            .contains_key(&ActionId("stack::repolith::0".into())),
+        "the coordinator itself must be forced"
+    );
+    parent
+        .execute_plan(&plan, ExecMode::FailFast)
+        .await
+        .expect("forced parent sync");
+
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "the child stack must NOT inherit the parent's force set — \
+         forcing a federation node re-runs the coordinator, not the whole tree"
+    );
+}
