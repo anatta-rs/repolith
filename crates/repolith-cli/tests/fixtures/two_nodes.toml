@@ -1,0 +1,29 @@
+[orchestrator]
+schema_version = "0.1"
+name = "two-nodes-cli-test"
+
+# Two nodes, both `cargo-install` from a local path, so `status` can compute
+# input hashes with no network. (A `git-clone` action cannot appear here:
+# its input_hash runs `git ls-remote` unconditionally, which would make
+# every status test in this file require a reachable remote. The dependency
+# edge it would create is covered instead by the test that builds a real
+# local repository and clones it over `file://`.)
+
+[[node]]
+id = "alpha"
+path = "/tmp/repolith-cli-fixture-alpha"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "alpha"
+  package = "alpha-pkg"
+  profile = "dev"
+  features = ["extra"]
+
+[[node]]
+id = "beta"
+path = "/tmp/repolith-cli-fixture-beta"
+
+  [[node.action]]
+  kind = "cargo-install"
+  crate = "beta"
