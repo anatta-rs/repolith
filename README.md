@@ -58,28 +58,46 @@ You preview, then sync:
 
 ```console
 $ repolith status
-+-------------------------------+--------+---------------+
-| Action                        | Status | Reason        |
-+===============================+========+===============+
-| shared-types::git-clone::0    | stale  | NoCachedBuild |
-| migration-tool::git-clone::0  | stale  | NoCachedBuild |
-| migration-tool::cargo-install | stale  | NoCachedBuild |
-+-------------------------------+--------+---------------+
++---------------------------------+--------+-------------+
+| Action                          | Status | Reason      |
++=================================+========+=============+
+| shared-types::git-clone::0      | stale  | never built |
+| migration-tool::git-clone::0    | stale  | never built |
+| migration-tool::cargo-install::1| stale  | never built |
++---------------------------------+--------+-------------+
 
 $ repolith sync --dry-run --explain
-• shared-types::git-clone::0: NoCachedBuild
-• migration-tool::git-clone::0: NoCachedBuild
-• migration-tool::cargo-install::1: NoCachedBuild
+• shared-types::git-clone::0: never built
+• migration-tool::git-clone::0: never built
+• migration-tool::cargo-install::1: never built
 dry-run: 3 action(s) would run
 
 $ repolith sync
-OK   shared-types::git-clone::0 (55 ms)
-OK   migration-tool::git-clone::0 (188 ms)
-OK   migration-tool::cargo-install::1 (4.2 s)
+layer 1/2 — 2 actions
+  → shared-types::git-clone::0
+  → migration-tool::git-clone::0
+  ✓ shared-types::git-clone::0   55 ms
+  ✓ migration-tool::git-clone::0   188 ms
+layer 2/2 — 1 action
+  → migration-tool::cargo-install::1
+  … still running: migration-tool::cargo-install::1 (30.0 s)
+  ✓ migration-tool::cargo-install::1   4 min 12 s
+3 ok, 0 failed
 
 $ repolith sync
 up to date — 0 stale actions
 ```
+
+Note the `→` lines: they appear **when an action starts**, not when it
+finishes. A `cargo install` can run for minutes, and a tool that says
+nothing until it is done leaves you unable to tell slow from stuck. When a
+layer takes a while, a line every 30 seconds names what is still running
+and for how long. Nothing is printed when nothing is running.
+
+`-v` adds diagnostics on **stderr** — the exact argv of every subprocess,
+cache hits and misses, why the planner marked something stale. It never
+repeats the progress lines above: the two never describe the same event, so
+`-v` adds detail instead of doubling output.
 
 The second `sync` is a **no-op** — the cache holds last-run input hashes
 per action, so nothing re-runs unless something actually changed. What

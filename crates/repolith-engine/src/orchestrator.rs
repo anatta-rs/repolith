@@ -17,7 +17,8 @@ use repolith_core::action::Action;
 use repolith_core::cache::{Cache, CacheError};
 use repolith_core::manifest::Manifest;
 use repolith_core::plan::{Plan, PlanError};
-use repolith_core::types::{ActionId, BuildEvent, Ctx, ExecMode};
+use repolith_core::progress::{NoopSink, ProgressSink};
+use repolith_core::types::{ActionId, BuildError, BuildEvent, Ctx, ExecMode};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -173,11 +174,45 @@ impl Orchestrator {
         plan: &Plan,
         mode: ExecMode,
     ) -> Result<Vec<BuildEvent>, ExecError> {
+        self.execute_plan_observed(plan, mode, &NoopSink).await
+    }
+
+    /// Same as [`Self::execute_plan`], reporting the action lifecycle to
+    /// `sink` as it happens.
+    ///
+    /// Behaviour is otherwise identical — the sink cannot influence what runs,
+    /// what is cached, or what is returned. `execute_plan` is this function
+    /// with a [`NoopSink`], which is why adding observation never changes an
+    /// existing caller.
+    ///
+    /// Deliberately **not** propagated into federated child stacks: a nested
+    /// `RepolithSync` builds its own orchestrator, and threading the sink
+    /// through would make a child's progress indistinguishable from its
+    /// parent's.
+    ///
+    /// # Errors
+    /// Same as [`Self::execute_plan`].
+    pub async fn execute_plan_observed(
+        &mut self,
+        plan: &Plan,
+        mode: ExecMode,
+        sink: &dyn ProgressSink,
+    ) -> Result<Vec<BuildEvent>, ExecError> {
         let sem = self
             .shared_semaphore
             .clone()
             .unwrap_or_else(|| Arc::new(Semaphore::new(self.max_parallelism)));
         let mut all_events: Vec<BuildEvent> = Vec::new();
+
+        // Count only the layers that will actually run: a plan whose layers 1
+        // and 2 are up to date must not announce "layer 3/7" and leave the
+        // reader wondering what happened to the first two.
+        let total_running = plan
+            .layers()
+            .iter()
+            .filter(|l| l.iter().any(|id| plan.reasons().contains_key(id)))
+            .count();
+        let mut layer_index = 0usize;
 
         for layer in plan.layers() {
             // Honor cancel between layers — without this, a cancel
@@ -199,11 +234,22 @@ impl Orchestrator {
                 continue;
             }
 
-            let layer_events = self.execute_layer(&stale, plan, mode, &sem).await;
+            layer_index += 1;
+            tracing::debug!(
+                layer = layer_index,
+                of = total_running,
+                actions = stale.len(),
+                "layer scheduled"
+            );
+            sink.on_layer_start(layer_index, total_running, &stale);
+            let layer_events = self
+                .execute_layer(&stale, plan, mode, &sem, sink, layer_index)
+                .await;
 
             // Persist the whole layer's events atomically — a crash mid-batch
             // shouldn't leave half the layer marked Success and the other
             // half un-persisted (and thus replayed on the next sync).
+            tracing::debug!(events = layer_events.len(), "persisting layer batch");
             self.cache.record_batch(layer_events.clone()).await?;
             all_events.extend(layer_events.iter().cloned());
 
@@ -226,7 +272,22 @@ impl Orchestrator {
         plan: &Plan,
         mode: ExecMode,
         sem: &Arc<Semaphore>,
+        sink: &dyn ProgressSink,
+        layer_index: usize,
     ) -> Vec<BuildEvent> {
+        // RAII rather than a call after the drain. The futures below are
+        // *inline*, not spawned: a panic inside `Action::execute` unwinds this
+        // very function, and a statement placed after the drain would be
+        // skipped — precisely in the case the sink needs to hear about. A
+        // `Drop` runs during unwinding.
+        //
+        // Precondition: `panic = "unwind"`. Under `panic = "abort"` no `Drop`
+        // runs at all and this guard is silent; see the test gated on
+        // `cfg(panic = "unwind")`.
+        let _layer_guard = LayerGuard {
+            sink,
+            index: layer_index,
+        };
         // Fresh child token per layer — failing layer N doesn't poison layer N+1.
         let cancel = self.base_ctx.cancel.child_token();
         let layer_ctx = Ctx {
@@ -266,6 +327,10 @@ impl Orchestrator {
                     } else {
                         Some(sem.acquire().await.expect("semaphore never closed"))
                     };
+                    // After the permit, never before: an action still
+                    // queued on the semaphore is not running, and announcing
+                    // it as such is exactly the lie this feature removes.
+                    sink.on_action_start(&id);
                     let started = Instant::now();
                     let result = action.execute(&layer_ctx).await;
                     (id, started.elapsed(), input_hash, result)
@@ -278,13 +343,26 @@ impl Orchestrator {
         while let Some((id, dur, input_hash, result)) = pending.next().await {
             let ms = u64::try_from(dur.as_millis()).unwrap_or(u64::MAX);
             match result {
-                Ok(out) => events.push(BuildEvent::Success {
-                    id,
-                    input: input_hash,
-                    output: out.output_hash,
-                    ms,
-                }),
+                Ok(out) => {
+                    sink.on_action_ok(&id, ms);
+                    events.push(BuildEvent::Success {
+                        id,
+                        input: input_hash,
+                        output: out.output_hash,
+                        ms,
+                    });
+                }
                 Err(e) => {
+                    // Cancelled is reported apart from failed. Under FailFast a
+                    // single real error cancels every peer, and calling those
+                    // peers failures would turn one fault into a screenful of
+                    // them. The cached `BuildEvent` is unchanged either way —
+                    // only what the reader is told differs.
+                    if matches!(e, BuildError::Cancelled) {
+                        sink.on_action_cancelled(&id, ms);
+                    } else {
+                        sink.on_action_failed(&id, &e, ms);
+                    }
                     events.push(BuildEvent::Failed {
                         id,
                         input: input_hash,
@@ -300,6 +378,23 @@ impl Orchestrator {
         }
 
         events
+    }
+}
+
+/// Emits [`ProgressSink::on_layer_end`] when the layer's scope ends —
+/// including while a panic unwinds it.
+///
+/// This is what lets a sink keep in-flight bookkeeping without leaking: an
+/// action that vanishes without a terminal event is invisible to the sink's
+/// own callbacks, and only the layer boundary can reconcile it.
+struct LayerGuard<'a> {
+    sink: &'a dyn ProgressSink,
+    index: usize,
+}
+
+impl Drop for LayerGuard<'_> {
+    fn drop(&mut self) {
+        self.sink.on_layer_end(self.index);
     }
 }
 

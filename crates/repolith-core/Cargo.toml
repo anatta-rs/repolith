@@ -16,6 +16,10 @@ readme.workspace = true
 workspace = true
 
 [dependencies]
+# Diagnostic only. The action lifecycle belongs to `ProgressSink` —
+# tracing never re-emits a start/done, so `-v` adds detail instead of
+# repeating what the progress output already said.
+tracing = "0.1"
 async-trait = "0.1"
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 serde = { version = "1.0", features = ["derive"] }

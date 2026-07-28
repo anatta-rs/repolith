@@ -47,6 +47,10 @@ pub mod cache;
 /// Layered execution plan with cascading staleness reasons.
 pub mod plan;
 
+/// `ProgressSink` — observe the action lifecycle while it happens, rather
+/// than reading about it once the plan has settled.
+pub mod progress;
+
 /// Manifest schema and parser (`repolith.toml`).
 pub mod manifest;
 

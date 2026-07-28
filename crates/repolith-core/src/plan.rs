@@ -269,8 +269,11 @@ impl Plan {
                     present,
                     forced.contains(id),
                 ) {
+                    tracing::debug!(%id, reason = %reason, "stale");
                     reasons.insert(id.clone(), reason);
                     stale.insert(id.clone());
+                } else {
+                    tracing::trace!(%id, hash = %now.short(), "up to date");
                 }
             }
         }
