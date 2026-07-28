@@ -20,7 +20,7 @@ workspace = true
 # tracing never re-emits a start/done, so `-v` adds detail instead of
 # repeating what the progress output already said.
 tracing = "0.1"
-repolith-core = { path = "../repolith-core", version = "0.0.11" }
+repolith-core = { path = "../repolith-core", version = "0.0.12" }
 async-trait = "0.1"
 dirs = "5"
 sha2 = "0.10"
