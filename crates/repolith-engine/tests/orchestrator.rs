@@ -431,3 +431,282 @@ async fn cancel_between_layers_aborts_pipeline() {
         "no action should have started under a pre-cancelled context"
     );
 }
+
+// ---------------------------------------------------------------------------
+// ProgressSink — the action lifecycle as it happens (issue #98).
+//
+// These assert the two properties the design rests on: exactly one start and
+// one terminal per action, emitted from a single place; and a layer boundary
+// that fires even when an action vanishes without a terminal.
+// ---------------------------------------------------------------------------
+
+use repolith_core::progress::ProgressSink;
+use std::sync::Mutex;
+
+/// Records every callback in order, so tests assert on the *sequence* rather
+/// than on counts alone — ordering is the whole point of `on_action_start`.
+#[derive(Default)]
+struct Recorder(Mutex<Vec<String>>);
+
+impl Recorder {
+    fn log(&self) -> Vec<String> {
+        self.0.lock().expect("not poisoned").clone()
+    }
+    fn push(&self, s: String) {
+        self.0.lock().expect("not poisoned").push(s);
+    }
+}
+
+impl ProgressSink for Recorder {
+    fn on_layer_start(&self, index: usize, total: usize, ids: &[ActionId]) {
+        self.push(format!("layer_start:{index}/{total}:{}", ids.len()));
+    }
+    fn on_action_start(&self, id: &ActionId) {
+        self.push(format!("start:{id}"));
+    }
+    fn on_action_ok(&self, id: &ActionId, _ms: u64) {
+        self.push(format!("ok:{id}"));
+    }
+    fn on_action_failed(&self, id: &ActionId, _err: &BuildError, _ms: u64) {
+        self.push(format!("failed:{id}"));
+    }
+    fn on_action_cancelled(&self, id: &ActionId, _ms: u64) {
+        self.push(format!("cancelled:{id}"));
+    }
+    fn on_layer_end(&self, index: usize) {
+        self.push(format!("layer_end:{index}"));
+    }
+}
+
+async fn run_observed(
+    actions: Vec<Box<dyn Action>>,
+    mode: ExecMode,
+    sink: &Recorder,
+) -> Result<Vec<BuildEvent>, ExecError> {
+    let mut builder = Orchestrator::builder()
+        .cache(AlwaysMissCache::new())
+        .base_ctx(ctx())
+        .max_parallelism(4);
+    for a in actions {
+        builder = builder.register_boxed(a);
+    }
+    let mut orch = builder.build().expect("build");
+    let plan = orch.compute_plan().await.expect("plan");
+    orch.execute_plan_observed(&plan, mode, sink).await
+}
+
+#[tokio::test]
+async fn every_action_gets_exactly_one_start_and_one_terminal() {
+    let st = TestState::new();
+    let actions: Vec<Box<dyn Action>> = vec![
+        Box::new(TestAction::new(
+            "a",
+            &[],
+            Arc::clone(&st),
+            Behavior::SucceedAfter(Duration::from_millis(1)),
+        )),
+        Box::new(TestAction::new(
+            "b",
+            &["a"],
+            Arc::clone(&st),
+            Behavior::SucceedAfter(Duration::from_millis(1)),
+        )),
+    ];
+    let sink = Recorder::default();
+    run_observed(actions, ExecMode::FailFast, &sink)
+        .await
+        .expect("succeeds");
+
+    let log = sink.log();
+    for id in ["a", "b"] {
+        assert_eq!(
+            log.iter().filter(|l| *l == &format!("start:{id}")).count(),
+            1,
+            "exactly one start for {id}: {log:?}"
+        );
+        assert_eq!(
+            log.iter()
+                .filter(|l| l.ends_with(&format!(":{id}")) && !l.starts_with("start:"))
+                .count(),
+            1,
+            "exactly one terminal for {id}: {log:?}"
+        );
+    }
+}
+
+/// The reason `on_action_start` exists at all: it must precede the await, so
+/// the line appears while the action runs and not once it is over.
+#[tokio::test]
+async fn start_precedes_its_own_terminal() {
+    let st = TestState::new();
+    let actions: Vec<Box<dyn Action>> = vec![Box::new(TestAction::new(
+        "a",
+        &[],
+        st,
+        Behavior::SucceedAfter(Duration::from_millis(20)),
+    ))];
+    let sink = Recorder::default();
+    run_observed(actions, ExecMode::FailFast, &sink)
+        .await
+        .expect("succeeds");
+
+    let log = sink.log();
+    let start = log.iter().position(|l| l == "start:a").expect("start");
+    let ok = log.iter().position(|l| l == "ok:a").expect("ok");
+    assert!(start < ok, "start must precede the terminal: {log:?}");
+}
+
+/// Under `FailFast` one real error cancels its peers. Reporting those peers as
+/// failures would turn a single fault into a screenful of them.
+#[tokio::test]
+async fn cancelled_peers_are_not_reported_as_failures() {
+    let st = TestState::new();
+    let actions: Vec<Box<dyn Action>> = vec![
+        Box::new(TestAction::new(
+            "boom",
+            &[],
+            Arc::clone(&st),
+            Behavior::FailImmediately,
+        )),
+        Box::new(TestAction::new(
+            "slow",
+            &[],
+            Arc::clone(&st),
+            Behavior::SucceedAfter(Duration::from_secs(30)),
+        )),
+    ];
+    let sink = Recorder::default();
+    let _ = run_observed(actions, ExecMode::FailFast, &sink).await;
+
+    let log = sink.log();
+    assert!(log.contains(&"failed:boom".to_string()), "{log:?}");
+    assert!(
+        log.contains(&"cancelled:slow".to_string()),
+        "the cancelled peer must be reported as cancelled, not failed: {log:?}"
+    );
+    assert!(
+        !log.contains(&"failed:slow".to_string()),
+        "a cancelled peer is not a failure: {log:?}"
+    );
+}
+
+/// `on_layer_end` closes every layer, and the index counts only layers that
+/// actually ran — announcing "layer 3/7" after skipping two would leave the
+/// reader wondering what happened to them.
+#[tokio::test]
+async fn layer_boundaries_are_paired_and_numbered_by_what_runs() {
+    let st = TestState::new();
+    let actions: Vec<Box<dyn Action>> = vec![
+        Box::new(TestAction::new(
+            "a",
+            &[],
+            Arc::clone(&st),
+            Behavior::SucceedAfter(Duration::from_millis(1)),
+        )),
+        Box::new(TestAction::new(
+            "b",
+            &["a"],
+            Arc::clone(&st),
+            Behavior::SucceedAfter(Duration::from_millis(1)),
+        )),
+    ];
+    let sink = Recorder::default();
+    run_observed(actions, ExecMode::FailFast, &sink)
+        .await
+        .expect("succeeds");
+
+    let log = sink.log();
+    assert_eq!(
+        log.iter().filter(|l| l.starts_with("layer_start:")).count(),
+        log.iter().filter(|l| l.starts_with("layer_end:")).count(),
+        "every layer that opens must close: {log:?}"
+    );
+    assert!(log.contains(&"layer_start:1/2:1".to_string()), "{log:?}");
+    assert!(log.contains(&"layer_start:2/2:1".to_string()), "{log:?}");
+}
+
+/// A plan with nothing stale must not emit layer boundaries for layers that
+/// are skipped — otherwise the CLI prints headers for work that never runs.
+#[tokio::test]
+async fn an_up_to_date_plan_emits_nothing() {
+    let st = TestState::new();
+    let mut builder = Orchestrator::builder()
+        .cache(AllHitCache)
+        .base_ctx(ctx())
+        .max_parallelism(4);
+    builder = builder.register_boxed(Box::new(TestAction::new(
+        "a",
+        &[],
+        st,
+        Behavior::SucceedAfter(Duration::from_millis(1)),
+    )));
+    let mut orch = builder.build().expect("build");
+    let plan = orch.compute_plan().await.expect("plan");
+
+    let sink = Recorder::default();
+    orch.execute_plan_observed(&plan, ExecMode::FailFast, &sink)
+        .await
+        .expect("no-op");
+    assert!(sink.log().is_empty(), "{:?}", sink.log());
+}
+
+/// The whole reason `on_layer_end` is carried by a `Drop` guard rather than a
+/// statement after the drain: the futures are *inline*, so a panic inside
+/// `Action::execute` unwinds `execute_layer` itself and any trailing statement
+/// would be skipped — precisely in the case a sink needs to reconcile.
+///
+/// Gated on `cfg(panic = "unwind")`: under `panic = "abort"` no `Drop` runs at
+/// all, and the gate documents that precondition mechanically instead of
+/// leaving it in a comment.
+#[cfg(panic = "unwind")]
+#[tokio::test]
+async fn on_layer_end_fires_even_when_an_action_panics() {
+    struct Panicking(ActionId);
+
+    #[async_trait]
+    impl Action for Panicking {
+        fn id(&self) -> ActionId {
+            self.0.clone()
+        }
+        fn deps(&self) -> Vec<ActionId> {
+            vec![]
+        }
+        async fn input_hash(&self, _ctx: &Ctx) -> Result<Sha256, BuildError> {
+            Ok(Sha256([0; 32]))
+        }
+        async fn execute(&self, _ctx: &Ctx) -> Result<BuildOutput, BuildError> {
+            panic!("boom from inside an action");
+        }
+    }
+
+    let sink = Arc::new(Recorder::default());
+    let sink_for_run = Arc::clone(&sink);
+
+    let outcome = tokio::spawn(async move {
+        let mut orch = Orchestrator::builder()
+            .cache(AlwaysMissCache::new())
+            .base_ctx(ctx())
+            .register_boxed(Box::new(Panicking(ActionId("boom".into()))))
+            .build()
+            .expect("build");
+        let plan = orch.compute_plan().await.expect("plan");
+        orch.execute_plan_observed(&plan, ExecMode::FailFast, sink_for_run.as_ref())
+            .await
+    })
+    .await;
+
+    assert!(
+        outcome.is_err(),
+        "the panic must propagate, not be swallowed"
+    );
+    let log = sink.log();
+    assert!(
+        log.contains(&"layer_end:1".to_string()),
+        "the Drop guard must still close the layer during unwinding: {log:?}"
+    );
+    assert!(
+        log.contains(&"start:boom".to_string()) && !log.iter().any(|l| l.starts_with("ok:")),
+        "the action started and never reached a terminal — that is the case \
+         on_layer_end exists to reconcile: {log:?}"
+    );
+}

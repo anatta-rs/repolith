@@ -38,13 +38,16 @@ fn first_run_3_successes() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let oks = count_lines_starting_with(&out, "OK   ");
+    // Per-action lines are now emitted live by `CliProgress` as the actions
+    // run, not replayed once the plan settles (issue #98).
+    let oks = count_lines_starting_with(&out, "✓ ");
     assert_eq!(
         oks,
         3,
-        "expected 3 OK lines, got {oks}\nstdout:\n{}",
+        "expected 3 success lines, got {oks}\nstdout:\n{}",
         String::from_utf8_lossy(&out.stdout)
     );
+    assert_stdout_contains(&out, "3 ok, 0 failed");
 }
 
 #[test]
@@ -105,12 +108,17 @@ fn failfast_halts_layer_two() {
         !out.status.success(),
         "sync must fail when the unreachable git-clone errors"
     );
-    let fails = count_lines_starting_with(&out, "FAIL ");
-    let oks = count_lines_starting_with(&out, "OK   ");
-    assert_eq!(fails, 1, "expected exactly 1 FAIL line, got {fails}");
+    let fails = count_lines_starting_with(&out, "✗ ");
+    let oks = count_lines_starting_with(&out, "✓ ");
+    // One live line plus one in the summary — the summary repeats failures
+    // on purpose, because they scroll away on a wide plan.
+    assert_eq!(
+        fails, 2,
+        "expected the live failure line and its summary echo, got {fails}"
+    );
     assert_eq!(
         oks, 0,
-        "cargo-install on layer 2 must be skipped, got {oks} OK lines"
+        "cargo-install on layer 2 must be skipped, got {oks} success lines"
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(

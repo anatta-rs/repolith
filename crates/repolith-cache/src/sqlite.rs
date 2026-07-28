@@ -166,7 +166,9 @@ impl SqliteCache {
 #[async_trait]
 impl Cache for SqliteCache {
     async fn last_build(&self, id: &ActionId) -> Option<BuildEvent> {
-        self.fetch(id).await.map(|r| r.event)
+        let hit = self.fetch(id).await.map(|r| r.event);
+        tracing::trace!(%id, hit = hit.is_some(), "cache lookup");
+        hit
     }
 
     async fn last_record(&self, id: &ActionId) -> Option<BuildRecord> {

@@ -406,3 +406,76 @@ fn sync_help_documents_force() {
         .stdout(str::contains("--force"))
         .stdout(str::contains("FILTER"));
 }
+
+// ---------------------------------------------------------------------------
+// Execution observability (issue #98).
+// ---------------------------------------------------------------------------
+
+/// The property the whole feature exists for: the terminal says something
+/// while work happens, not only once it is over.
+#[test]
+fn sync_announces_the_layer_and_each_action() {
+    let tmp = tempfile::tempdir().unwrap();
+    cmd()
+        .arg("--manifest")
+        .arg(fixtures().join("two_nodes.toml"))
+        .arg("--cache-path")
+        .arg(tmp.path().join("cache.db"))
+        .arg("sync")
+        .arg("--dry-run")
+        .assert()
+        .success();
+
+    // dry-run executes nothing, so nothing is announced — the sink must not
+    // narrate work that will not happen.
+    cmd()
+        .arg("--manifest")
+        .arg(fixtures().join("two_nodes.toml"))
+        .arg("--cache-path")
+        .arg(tmp.path().join("cache.db"))
+        .arg("sync")
+        .arg("--dry-run")
+        .assert()
+        .stdout(str::contains("layer 1/").not());
+}
+
+/// `repolith sync | head` is ordinary usage, and `println!` would panic on
+/// EPIPE because Rust ignores SIGPIPE. The sink writes with `writeln!` and
+/// discards the error, which is what makes "must not panic" mechanical.
+#[test]
+fn a_closed_pipe_does_not_panic() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(assert_cmd::cargo::cargo_bin("repolith"))
+        .arg("--manifest")
+        .arg(fixtures().join("two_nodes.toml"))
+        .arg("--cache-path")
+        .arg(tmp.path().join("cache.db"))
+        .arg("sync")
+        .arg("--dry-run")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("run");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("failed printing to stdout"),
+        "the EPIPE panic message must never appear: {stderr}"
+    );
+}
+
+/// An up-to-date stack prints no progress furniture: no layer header, no
+/// heartbeat line. A quiet sync must stay quiet.
+#[test]
+fn an_up_to_date_sync_prints_no_progress() {
+    let tmp = tempfile::tempdir().unwrap();
+    cmd()
+        .arg("--manifest")
+        .arg(fixtures().join("empty.toml"))
+        .arg("--cache-path")
+        .arg(tmp.path().join("cache.db"))
+        .arg("sync")
+        .assert()
+        .success()
+        .stdout(str::contains("layer").not())
+        .stdout(str::contains("still running").not());
+}

@@ -12,10 +12,12 @@
 //! short-circuits its in-flight subprocess on the next `.await` poll.
 
 mod factory;
+mod progress;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use comfy_table::{Cell, Table};
+use progress::{CliProgress, Heartbeat};
 use repolith_cache::SqliteCache;
 use repolith_core::manifest::{ActionEntry, Manifest, action_kind};
 use repolith_core::plan::{ChangeReason, Plan};
@@ -23,6 +25,7 @@ use repolith_core::types::{ActionId, BuildEvent, Ctx, ExecMode};
 use repolith_engine::orchestrator::Orchestrator;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
@@ -370,13 +373,26 @@ async fn run_sync(cli: &Cli, args: &SyncArgs, cancel: CancellationToken) -> Resu
         return Ok(());
     }
 
-    match orch.execute_plan(&plan, mode).await {
+    // One writer on stdout for the whole run: the heartbeat writes through
+    // this same CliProgress, and so does the final summary.
+    let progress = Arc::new(CliProgress::new());
+    let heartbeat = Heartbeat::spawn(Arc::clone(&progress));
+
+    let outcome = orch
+        .execute_plan_observed(&plan, mode, progress.as_ref())
+        .await;
+
+    // Ordered shutdown before the summary. `Drop` alone would cancel without
+    // waiting, letting a tick already inside `writeln!` land mid-summary.
+    heartbeat.stop().await;
+
+    match outcome {
         Ok(events) => {
-            print_events(&events);
+            progress.summary(&events);
             Ok(())
         }
         Err(repolith_engine::orchestrator::ExecError::LayerFailed { events }) => {
-            print_events(&events);
+            progress.summary(&events);
             anyhow::bail!("sync failed: see events above");
         }
         Err(other) => Err(anyhow::Error::from(other)),
@@ -665,17 +681,6 @@ fn human_ms(ms: u64) -> String {
         format!("{}.{} s", ms / 1000, (ms % 1000) / 100)
     } else {
         format!("{} min {} s", ms / 60_000, (ms % 60_000) / 1000)
-    }
-}
-
-fn print_events(events: &[BuildEvent]) {
-    for ev in events {
-        match ev {
-            BuildEvent::Success { id, ms, .. } => println!("OK   {id} ({ms} ms)"),
-            BuildEvent::Failed { id, error, ms, .. } => {
-                println!("FAIL {id} ({ms} ms): {error}");
-            }
-        }
     }
 }
 

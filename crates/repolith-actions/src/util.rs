@@ -41,6 +41,7 @@ pub(crate) async fn run_with_cancel(
     mut cmd: Command,
     cancel: &CancellationToken,
 ) -> Result<Output, BuildError> {
+    tracing::debug!(argv = ?cmd.as_std(), "spawning");
     cmd.kill_on_drop(true);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     // On Unix, process_group(0) makes the child the leader of a new group
