@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.12](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.11...repolith-core-v0.0.12) - 2026-07-28
+
+### Added
+
+- *(engine+cli)* observabilité de l'exécution — ProgressSink, LayerGuard, heartbeat ([#99](https://github.com/anatta-rs/repolith/pull/99))
+- *(cli)* sync --force [FILTER] — re-run actions without nuking the cache ([#97](https://github.com/anatta-rs/repolith/pull/97))
+
+### Fixed
+
+- *(cache)* follow path dependencies — workspace members no longer go stale silently (closes #78) ([#94](https://github.com/anatta-rs/repolith/pull/94))
+
 ## [0.0.11](https://github.com/anatta-rs/repolith/compare/repolith-core-v0.0.10...repolith-core-v0.0.11) - 2026-07-27
 
 ### Added
